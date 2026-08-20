@@ -1,10 +1,8 @@
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
 import type { Product, Order, OrderItem, OrderStatus } from "./types";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const FUNCTION_URL = `${supabaseUrl}/functions/v1/admin-api`;
 
@@ -14,6 +12,8 @@ function getPublicHeaders(): HeadersInit {
     apikey: supabaseAnonKey,
   };
 }
+
+export { supabase };
 
 export const api = {
   login: async (username: string, password: string) => {
