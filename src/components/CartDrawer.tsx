@@ -1,4 +1,4 @@
-import { X, Trash2, Plus, Minus, ShoppingCart, Truck, Tag, MessageCircle, CheckCircle2 } from "lucide-react";
+import { X, Trash2, Plus, Minus, ShoppingCart, Truck, Tag, MessageCircle, CircleCheck as CheckCircle2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import type { CartItem } from "@/lib/types";
 import { buildWhatsAppMessage, buildWhatsAppUrl } from "@/lib/whatsapp";
@@ -26,6 +26,7 @@ export default function CartDrawer({
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [landmark, setLandmark] = useState("");
+  const [pincode, setPincode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [error, setError] = useState("");
@@ -55,40 +56,29 @@ export default function CartDrawer({
   const buildOrderItems = () =>
     cart.map((item) => ({
       name: item.product.name,
-      qty: item.qty,
-      mrp: item.product.mrp,
-      selling_price: item.product.selling_price,
+      quantity: item.qty,
+      price: item.product.selling_price,
     }));
 
-  const handleWhatsApp = () => {
+  const placeOrder = async (paymentMethod: string) => {
     const err = validateForm();
     if (err) {
       setError(err);
-      return;
-    }
-    setError("");
-    const msg = buildWhatsAppMessage(name, phone, address, landmark, cart, total);
-    window.open(buildWhatsAppUrl(msg), "_blank");
-  };
-
-  const handleOrderSubmit = async () => {
-    const err = validateForm();
-    if (err) {
-      setError(err);
-      return;
+      return false;
     }
     setError("");
     setSubmitting(true);
     try {
       await api.createOrder({
         customer_name: name,
-        customer_phone: phone,
-        address,
-        landmark,
+        phone,
+        address_line: address,
+        area: landmark,
+        pincode,
         items: buildOrderItems(),
-        subtotal,
-        savings,
-        total,
+        total_amount: total,
+        delivery_fee: 0,
+        payment_method: paymentMethod,
       });
       setOrderSuccess(true);
       onClear();
@@ -96,11 +86,26 @@ export default function CartDrawer({
       setPhone("");
       setAddress("");
       setLandmark("");
+      setPincode("");
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to place order");
+      return false;
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleWhatsApp = async () => {
+    const success = await placeOrder("WhatsApp Order");
+    if (success) {
+      const msg = buildWhatsAppMessage(name, phone, address, landmark, cart, total);
+      window.open(buildWhatsAppUrl(msg), "_blank");
+    }
+  };
+
+  const handleOrderSubmit = async () => {
+    await placeOrder("Cash on Delivery");
   };
 
   return (
@@ -246,7 +251,14 @@ export default function CartDrawer({
                   type="text"
                   value={landmark}
                   onChange={(e) => setLandmark(e.target.value)}
-                  placeholder="Landmark (optional)"
+                  placeholder="Area / Landmark (optional)"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <input
+                  type="text"
+                  value={pincode}
+                  onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="Pincode (optional)"
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
                 {error && (
@@ -283,7 +295,8 @@ export default function CartDrawer({
                 <div className="space-y-2 pt-2">
                   <button
                     onClick={handleWhatsApp}
-                    className="w-full py-2.5 bg-[#25D366] text-white text-sm font-semibold rounded-lg hover:bg-[#1da851] transition-colors flex items-center justify-center gap-2"
+                    disabled={submitting}
+                    className="w-full py-2.5 bg-[#25D366] text-white text-sm font-semibold rounded-lg hover:bg-[#1da851] transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <MessageCircle className="w-4 h-4" />
                     Order via WhatsApp

@@ -1,22 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  Package,
-  ClipboardList,
-  Plus,
-  Pencil,
-  Trash2,
-  X,
-  Search,
-  LogOut,
-  ArrowLeft,
-  AlertCircle,
-} from "lucide-react";
-import { api } from "@/lib/api";
-import {
-  CATEGORIES,
-  ORDER_STATUS_LABELS,
-  ORDER_STATUS_COLORS,
-} from "@/lib/types";
+import { Package, ClipboardList, Plus, Pencil, Trash2, X, Search, LogOut, ArrowLeft, CircleAlert as AlertCircle, Upload } from "lucide-react";
+import { api, supabase } from "@/lib/api";
+import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, FALLBACK_IMAGE } from "@/lib/types";
 import type { Product, Order, OrderStatus, Category } from "@/lib/types";
 
 interface AdminDashboardProps {
@@ -28,10 +13,11 @@ type Tab = "products" | "orders";
 export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const [tab, setTab] = useState<Tab>("products");
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<Category | "all">("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<Product | null>(null);
@@ -42,6 +28,16 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
       setProducts(data);
     } catch (e) {
       console.error("Failed to load products:", e);
+    }
+  }, []);
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.from("categories").select("*").order("name");
+      if (error) throw error;
+      setCategories(data || []);
+    } catch (e) {
+      console.error("Failed to load categories:", e);
     }
   }, []);
 
@@ -56,8 +52,10 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadProducts(), loadOrders()]).finally(() => setLoading(false));
-  }, [loadProducts, loadOrders]);
+    Promise.all([loadProducts(), loadCategories(), loadOrders()]).finally(() =>
+      setLoading(false)
+    );
+  }, [loadProducts, loadCategories, loadOrders]);
 
   const handleLogout = () => {
     api.logout();
@@ -66,11 +64,14 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
 
   const filteredProducts = products.filter((p) => {
     const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = categoryFilter === "all" || p.category === categoryFilter;
+    const matchesCategory = categoryFilter === "all" || p.category_name === categoryFilter;
     return matchesSearch && matchesCategory;
   });
 
-  const handleSaveProduct = async (product: Omit<Product, "id" | "created_at">, id?: string) => {
+  const handleSaveProduct = async (
+    product: Omit<Product, "id" | "created_at">,
+    id?: string
+  ) => {
     if (id) {
       await api.updateProduct(id, product);
     } else {
@@ -152,13 +153,13 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
               </div>
               <select
                 value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value as Category | "all")}
+                onChange={(e) => setCategoryFilter(e.target.value)}
                 className="px-4 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
               >
                 <option value="all">All Categories</option>
-                {CATEGORIES.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
                   </option>
                 ))}
               </select>
@@ -206,8 +207,8 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-700 capitalize">
-                            {p.category}
+                          <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-700">
+                            {p.category_name}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right text-gray-500 line-through">
@@ -219,12 +220,12 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                         <td className="px-4 py-3 text-center">
                           <span
                             className={`px-2 py-1 text-xs font-medium rounded-full ${
-                              p.stock_qty > 0
+                              p.in_stock && p.stock_quantity > 0
                                 ? "bg-emerald-100 text-emerald-700"
                                 : "bg-red-100 text-red-700"
                             }`}
                           >
-                            {p.stock_qty}
+                            {p.stock_quantity}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -278,32 +279,27 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                         <h3 className="font-bold text-gray-900">{order.customer_name}</h3>
                         <span
                           className={`px-2 py-0.5 text-xs font-medium rounded-full border ${
-                            ORDER_STATUS_COLORS[order.status]
+                            ORDER_STATUS_COLORS[order.order_status as OrderStatus] ||
+                            "bg-gray-100 text-gray-700 border-gray-200"
                           }`}
                         >
-                          {ORDER_STATUS_LABELS[order.status]}
+                          {order.order_status}
                         </span>
                       </div>
+                      <p className="text-sm text-gray-500">📞 {order.phone}</p>
                       <p className="text-sm text-gray-500">
-                        📞 {order.customer_phone}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        📍 {order.address}
-                        {order.landmark && `, Landmark: ${order.landmark}`}
+                        📍 {order.address_line}
+                        {order.area ? `, ${order.area}` : ""}
+                        {order.pincode ? ` - ${order.pincode}` : ""}
                       </p>
                       <p className="text-xs text-gray-400 mt-1">
                         {new Date(order.created_at).toLocaleString("en-IN")}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-xs text-gray-400 line-through">
-                        ₹{order.subtotal.toFixed(2)}
-                      </p>
-                      <p className="text-xs text-emerald-600">
-                        Saved ₹{order.savings.toFixed(2)}
-                      </p>
+                      <p className="text-xs text-gray-400">{order.payment_method}</p>
                       <p className="text-lg font-bold text-emerald-700">
-                        ₹{order.total.toFixed(2)}
+                        ₹{order.total_amount.toFixed(2)}
                       </p>
                     </div>
                   </div>
@@ -317,19 +313,17 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                         >
                           <span>
                             {item.name}{" "}
-                            <span className="text-gray-400">(Qty: {item.qty})</span>
+                            <span className="text-gray-400">(Qty: {item.quantity})</span>
                           </span>
-                          <span>₹{(item.selling_price * item.qty).toFixed(2)}</span>
+                          <span>₹{(item.price * item.quantity).toFixed(2)}</span>
                         </div>
                       ))}
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-gray-500">
-                        Update Status:
-                      </label>
+                      <label className="text-xs font-medium text-gray-500">Update Status:</label>
                       <select
-                        value={order.status}
+                        value={order.order_status}
                         onChange={(e) =>
                           handleOrderStatusChange(order.id, e.target.value as OrderStatus)
                         }
@@ -353,6 +347,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
       {showProductModal && (
         <ProductModal
           product={editingProduct}
+          categories={categories}
           onClose={() => {
             setShowProductModal(false);
             setEditingProduct(null);
@@ -396,11 +391,7 @@ function TabButton({
     >
       {icon}
       {label}
-      <span
-        className={`px-1.5 py-0.5 text-xs rounded-full ${
-          active ? "bg-white/20" : "bg-gray-100"
-        }`}
-      >
+      <span className={`px-1.5 py-0.5 text-xs rounded-full ${active ? "bg-white/20" : "bg-gray-100"}`}>
         {count}
       </span>
     </button>
@@ -409,27 +400,47 @@ function TabButton({
 
 function ProductModal({
   product,
+  categories,
   onClose,
   onSave,
 }: {
   product: Product | null;
+  categories: Category[];
   onClose: () => void;
   onSave: (product: Omit<Product, "id" | "created_at">, id?: string) => void;
 }) {
   const [name, setName] = useState(product?.name || "");
-  const [category, setCategory] = useState<Category>(product?.category || "allopathic");
-  const [subcategory, setSubcategory] = useState(product?.subcategory || "");
+  const [categoryName, setCategoryName] = useState(
+    product?.category_name || categories[0]?.name || ""
+  );
   const [mrp, setMrp] = useState(product?.mrp?.toString() || "");
   const [sellingPrice, setSellingPrice] = useState(product?.selling_price?.toString() || "");
-  const [stockQty, setStockQty] = useState(product?.stock_qty?.toString() || "0");
+  const [stockQty, setStockQty] = useState(product?.stock_quantity?.toString() || "0");
+  const [inStock, setInStock] = useState(product?.in_stock ?? true);
   const [unit, setUnit] = useState(product?.unit || "");
   const [imageUrl, setImageUrl] = useState(product?.image_url || "");
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const computedSellingPrice = mrp
     ? (Math.round(parseFloat(mrp) * 0.85 * 100) / 100).toFixed(2)
     : "";
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError("");
+    try {
+      const url = await api.uploadProductImage(file);
+      setImageUrl(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload image");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -442,11 +453,14 @@ function ProductModal({
       await onSave(
         {
           name,
-          category,
-          subcategory,
+          category_name: categoryName,
           mrp: mrpNum,
-          selling_price: sellingPrice ? parseFloat(sellingPrice) : parseFloat(computedSellingPrice),
-          stock_qty: parseInt(stockQty) || 0,
+          selling_price: sellingPrice
+            ? parseFloat(sellingPrice)
+            : parseFloat(computedSellingPrice),
+          discount_percentage: 15,
+          stock_quantity: parseInt(stockQty) || 0,
+          in_stock: inStock,
           unit,
           image_url: imageUrl,
         },
@@ -483,30 +497,19 @@ function ProductModal({
             />
           </Field>
 
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Category">
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value as Category)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-              >
-                {CATEGORIES.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Subcategory">
-              <input
-                type="text"
-                value={subcategory}
-                onChange={(e) => setSubcategory(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                placeholder="e.g. Painkillers"
-              />
-            </Field>
-          </div>
+          <Field label="Category">
+            <select
+              value={categoryName}
+              onChange={(e) => setCategoryName(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            >
+              {categories.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="MRP (₹)">
@@ -557,13 +560,49 @@ function ProductModal({
             </Field>
           </div>
 
-          <Field label="Image URL">
+          <Field label="In Stock">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={inStock}
+                onChange={(e) => setInStock(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              <span className="text-sm text-gray-700">Available for purchase</span>
+            </label>
+          </Field>
+
+          <Field label="Product Image">
+            <div className="flex items-center gap-3">
+              <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 shrink-0">
+                {imageUrl && (
+                  <img
+                    src={imageUrl}
+                    alt="preview"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = FALLBACK_IMAGE;
+                    }}
+                    className="w-full h-full object-cover"
+                  />
+                )}
+              </div>
+              <label className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">
+                <Upload className="w-4 h-4" />
+                {uploading ? "Uploading..." : "Upload Image"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
             <input
               type="text"
               value={imageUrl}
               onChange={(e) => setImageUrl(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              placeholder="https://..."
+              className="w-full mt-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              placeholder="Or paste image URL..."
             />
           </Field>
 

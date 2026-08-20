@@ -1,13 +1,13 @@
 import { Search, ShoppingCart, Menu, X, ShieldCheck, Phone } from "lucide-react";
 import { useState } from "react";
 import type { Category } from "@/lib/types";
-import { CATEGORIES } from "@/lib/types";
 
 interface HeaderProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
-  activeCategory: Category | "all";
-  onCategoryChange: (c: Category | "all") => void;
+  activeCategory: string;
+  onCategoryChange: (c: string) => void;
+  categories: Category[];
   cartCount: number;
   onCartClick: () => void;
   onAdminClick: () => void;
@@ -18,6 +18,7 @@ export default function Header({
   onSearchChange,
   activeCategory,
   onCategoryChange,
+  categories,
   cartCount,
   onCartClick,
   onAdminClick,
@@ -96,12 +97,12 @@ export default function Header({
             active={activeCategory === "all"}
             onClick={() => onCategoryChange("all")}
           />
-          {CATEGORIES.map((cat) => (
+          {categories.map((cat) => (
             <CategoryTab
-              key={cat.value}
-              label={cat.label}
-              active={activeCategory === cat.value}
-              onClick={() => onCategoryChange(cat.value)}
+              key={cat.id}
+              label={cat.name}
+              active={activeCategory === cat.name}
+              onClick={() => onCategoryChange(cat.name)}
             />
           ))}
         </nav>
@@ -119,13 +120,13 @@ export default function Header({
               }}
               mobile
             />
-            {CATEGORIES.map((cat) => (
+            {categories.map((cat) => (
               <CategoryTab
-                key={cat.value}
-                label={cat.label}
-                active={activeCategory === cat.value}
+                key={cat.id}
+                label={cat.name}
+                active={activeCategory === cat.name}
                 onClick={() => {
-                  onCategoryChange(cat.value);
+                  onCategoryChange(cat.name);
                   setMobileMenuOpen(false);
                 }}
                 mobile

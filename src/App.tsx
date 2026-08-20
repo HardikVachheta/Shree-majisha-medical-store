@@ -6,18 +6,32 @@ import Footer from "@/components/Footer";
 import CartDrawer from "@/components/CartDrawer";
 import AdminLoginModal from "@/components/AdminLoginModal";
 import AdminDashboard from "@/components/AdminDashboard";
-import { api } from "@/lib/api";
+import { api, supabase } from "@/lib/api";
 import type { Product, CartItem, Category } from "@/lib/types";
 
 function App() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState<Category | "all">("all");
+  const [activeCategory, setActiveCategory] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [adminView, setAdminView] = useState(false);
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("categories")
+        .select("*")
+        .order("name");
+      if (error) throw error;
+      setCategories(data || []);
+    } catch (e) {
+      console.error("Failed to load categories:", e);
+    }
+  }, []);
 
   const loadProducts = useCallback(async () => {
     setLoading(true);
@@ -32,14 +46,13 @@ function App() {
   }, []);
 
   useEffect(() => {
+    loadCategories();
     loadProducts();
-  }, [loadProducts]);
+  }, [loadCategories, loadProducts]);
 
   const filteredProducts = products.filter((p) => {
-    const matchesSearch =
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.subcategory.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = activeCategory === "all" || p.category === activeCategory;
+    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = activeCategory === "all" || p.category_name === activeCategory;
     return matchesSearch && matchesCategory;
   });
 
@@ -92,6 +105,7 @@ function App() {
         onSearchChange={setSearchQuery}
         activeCategory={activeCategory}
         onCategoryChange={setActiveCategory}
+        categories={categories}
         cartCount={cartCount}
         onCartClick={() => setCartOpen(true)}
         onAdminClick={handleAdminClick}
@@ -100,9 +114,7 @@ function App() {
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
         <div className="mb-6">
           <h2 className="text-xl font-bold text-gray-900 mb-1">
-            {activeCategory === "all"
-              ? "All Products"
-              : `${activeCategory.charAt(0).toUpperCase()}${activeCategory.slice(1)}`}
+            {activeCategory === "all" ? "All Products" : activeCategory}
           </h2>
           <p className="text-sm text-gray-500">
             {filteredProducts.length} {filteredProducts.length === 1 ? "product" : "products"} available

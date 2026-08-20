@@ -1,6 +1,7 @@
-import { Plus, Minus, Check, AlertTriangle } from "lucide-react";
+import { Plus, Minus, Check, TriangleAlert as AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import type { Product } from "@/lib/types";
+import { FALLBACK_IMAGE } from "@/lib/types";
 
 interface ProductCardProps {
   product: Product;
@@ -8,38 +9,35 @@ interface ProductCardProps {
 }
 
 const CATEGORY_BADGE: Record<string, string> = {
-  allopathic: "bg-blue-100 text-blue-700",
-  ayurvedic: "bg-green-100 text-green-700",
-  cosmetics: "bg-pink-100 text-pink-700",
-  provisional: "bg-amber-100 text-amber-700",
-  surgical: "bg-slate-100 text-slate-700",
+  Allopathic: "bg-blue-100 text-blue-700",
+  Ayurvedic: "bg-green-100 text-green-700",
+  Cosmetics: "bg-pink-100 text-pink-700",
+  Provisional: "bg-amber-100 text-amber-700",
+  Surgical: "bg-slate-100 text-slate-700",
 };
 
 export default function ProductCard({ product, onAddToCart }: ProductCardProps) {
   const [qty, setQty] = useState(1);
-  const inStock = product.stock_qty > 0;
+  const [imgError, setImgError] = useState(false);
+  const inStock = product.in_stock && product.stock_quantity > 0;
+  const imageSrc = imgError || !product.image_url ? FALLBACK_IMAGE : product.image_url;
 
   return (
     <div className="group bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-lg hover:border-emerald-200 transition-all duration-300 overflow-hidden flex flex-col">
       <div className="relative aspect-square bg-gray-50 overflow-hidden">
-        {product.image_url ? (
-          <img
-            src={product.image_url}
-            alt={product.name}
-            loading="lazy"
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-300">
-            <span className="text-sm">No image</span>
-          </div>
-        )}
+        <img
+          src={imageSrc}
+          alt={product.name}
+          loading="lazy"
+          onError={() => setImgError(true)}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+        />
         <span
-          className={`absolute top-2 left-2 px-2 py-1 text-xs font-semibold rounded-full capitalize ${
-            CATEGORY_BADGE[product.category] || "bg-gray-100 text-gray-700"
+          className={`absolute top-2 left-2 px-2 py-1 text-xs font-semibold rounded-full ${
+            CATEGORY_BADGE[product.category_name] || "bg-gray-100 text-gray-700"
           }`}
         >
-          {product.category}
+          {product.category_name}
         </span>
         {inStock ? (
           <span className="absolute top-2 right-2 px-2 py-1 text-xs font-semibold rounded-full bg-emerald-600 text-white flex items-center gap-1">
@@ -56,9 +54,6 @@ export default function ProductCard({ product, onAddToCart }: ProductCardProps) 
         <h3 className="font-semibold text-gray-900 text-sm leading-snug mb-1 line-clamp-2">
           {product.name}
         </h3>
-        {product.subcategory && (
-          <p className="text-xs text-gray-500 mb-1">{product.subcategory}</p>
-        )}
         {product.unit && (
           <p className="text-xs text-gray-400 mb-2">{product.unit}</p>
         )}
@@ -70,7 +65,7 @@ export default function ProductCard({ product, onAddToCart }: ProductCardProps) 
           <span className="text-sm text-gray-400 line-through">
             ₹{product.mrp.toFixed(2)}
           </span>
-          <span className="text-xs font-semibold text-red-500">15% OFF</span>
+          <span className="text-xs font-semibold text-red-500">{product.discount_percentage || 15}% OFF</span>
         </div>
 
         <div className="mt-auto">

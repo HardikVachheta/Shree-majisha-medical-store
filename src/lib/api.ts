@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import type { Product, OrderItem } from "./types";
+import type { Product, Order, OrderItem, OrderStatus } from "./types";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -8,18 +8,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const FUNCTION_URL = `${supabaseUrl}/functions/v1/admin-api`;
 
-function getAuthHeaders(): HeadersInit {
-  const token = localStorage.getItem("admin_token");
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    apikey: supabaseAnonKey,
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  return headers;
-}
-
 function getPublicHeaders(): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -27,23 +15,18 @@ function getPublicHeaders(): HeadersInit {
   };
 }
 
-async function handleResponse(res: Response) {
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({ error: `Request failed (${res.status})` }));
-    throw new Error(errorBody.error || `Request failed (${res.status})`);
-  }
-  return res.json();
-}
-
 export const api = {
-  // Auth
   login: async (username: string, password: string) => {
     const res = await fetch(`${FUNCTION_URL}/auth/login`, {
       method: "POST",
       headers: getPublicHeaders(),
       body: JSON.stringify({ username, password }),
     });
-    const data = await handleResponse(res);
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => ({ error: `Login failed (${res.status})` }));
+      throw new Error(errorBody.error || `Login failed (${res.status})`);
+    }
+    const data = await res.json();
     localStorage.setItem("admin_token", data.token);
     localStorage.setItem("admin_username", data.username);
     return data;
@@ -56,72 +39,130 @@ export const api = {
 
   isLoggedIn: () => !!localStorage.getItem("admin_token"),
 
-  // Products
-  getProducts: async () => {
-    const res = await fetch(`${FUNCTION_URL}/products`, {
-      headers: getPublicHeaders(),
-    });
-    return handleResponse(res);
+  getProducts: async (): Promise<Product[]> => {
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data || []) as Product[];
   },
 
-  createProduct: async (product: Omit<Product, "id" | "created_at">) => {
-    const res = await fetch(`${FUNCTION_URL}/products`, {
-      method: "POST",
-      headers: getAuthHeaders(),
-      body: JSON.stringify(product),
-    });
-    return handleResponse(res);
+  createProduct: async (product: Omit<Product, "id" | "created_at">): Promise<Product> => {
+    const { data, error } = await supabase
+      .from("products")
+      .insert({
+        name: product.name,
+        category_name: product.category_name,
+        mrp: product.mrp,
+        selling_price: product.selling_price,
+        discount_percentage: product.discount_percentage ?? 15,
+        unit: product.unit,
+        in_stock: product.in_stock,
+        stock_quantity: product.stock_quantity,
+        image_url: product.image_url,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Product;
   },
 
-  updateProduct: async (id: string, updates: Partial<Product>) => {
-    const res = await fetch(`${FUNCTION_URL}/products/${id}`, {
-      method: "PUT",
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    });
-    return handleResponse(res);
+  updateProduct: async (id: string, updates: Partial<Product>): Promise<Product> => {
+    const update: Record<string, unknown> = {};
+    if (updates.name !== undefined) update.name = updates.name;
+    if (updates.category_name !== undefined) update.category_name = updates.category_name;
+    if (updates.mrp !== undefined) {
+      update.mrp = updates.mrp;
+      if (updates.selling_price !== undefined) {
+        update.selling_price = updates.selling_price;
+      } else {
+        update.selling_price = Math.round(updates.mrp * 0.85 * 100) / 100;
+      }
+    } else if (updates.selling_price !== undefined) {
+      update.selling_price = updates.selling_price;
+    }
+    if (updates.discount_percentage !== undefined) update.discount_percentage = updates.discount_percentage;
+    if (updates.unit !== undefined) update.unit = updates.unit;
+    if (updates.in_stock !== undefined) update.in_stock = updates.in_stock;
+    if (updates.stock_quantity !== undefined) update.stock_quantity = updates.stock_quantity;
+    if (updates.image_url !== undefined) update.image_url = updates.image_url;
+
+    const { data, error } = await supabase
+      .from("products")
+      .update(update)
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Product;
   },
 
-  deleteProduct: async (id: string) => {
-    const res = await fetch(`${FUNCTION_URL}/products/${id}`, {
-      method: "DELETE",
-      headers: getAuthHeaders(),
-    });
-    return handleResponse(res);
+  deleteProduct: async (id: string): Promise<void> => {
+    const { error } = await supabase.from("products").delete().eq("id", id);
+    if (error) throw new Error(error.message);
   },
 
-  // Orders
+  uploadProductImage: async (file: File): Promise<string> => {
+    const ext = file.name.split(".").pop() || "jpg";
+    const fileName = `product-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error: uploadError } = await supabase.storage
+      .from("product")
+      .upload(fileName, file);
+    if (uploadError) throw new Error(uploadError.message);
+    const { data } = supabase.storage.from("product").getPublicUrl(fileName);
+    return data.publicUrl;
+  },
+
   createOrder: async (order: {
     customer_name: string;
-    customer_phone: string;
-    address: string;
-    landmark: string;
+    phone: string;
+    address_line: string;
+    area: string;
+    pincode: string;
     items: OrderItem[];
-    subtotal: number;
-    savings: number;
-    total: number;
-  }) => {
-    const res = await fetch(`${FUNCTION_URL}/orders`, {
-      method: "POST",
-      headers: getPublicHeaders(),
-      body: JSON.stringify(order),
-    });
-    return handleResponse(res);
+    total_amount: number;
+    delivery_fee: number;
+    payment_method: string;
+  }): Promise<Order> => {
+    const { data, error } = await supabase
+      .from("orders")
+      .insert({
+        customer_name: order.customer_name,
+        phone: order.phone,
+        address_line: order.address_line,
+        area: order.area,
+        city: "Ahmedabad",
+        pincode: order.pincode,
+        items: order.items,
+        total_amount: order.total_amount,
+        delivery_fee: order.delivery_fee,
+        payment_method: order.payment_method,
+        order_status: "Received",
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Order;
   },
 
-  getOrders: async () => {
-    const res = await fetch(`${FUNCTION_URL}/orders`, {
-      headers: getAuthHeaders(),
-    });
-    return handleResponse(res);
+  getOrders: async (): Promise<Order[]> => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data || []) as Order[];
   },
 
-  updateOrderStatus: async (id: string, status: string) => {
-    const res = await fetch(`${FUNCTION_URL}/orders/${id}/status`, {
-      method: "PUT",
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ status }),
-    });
-    return handleResponse(res);
+  updateOrderStatus: async (id: string, status: OrderStatus): Promise<Order> => {
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ order_status: status })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Order;
   },
 };
