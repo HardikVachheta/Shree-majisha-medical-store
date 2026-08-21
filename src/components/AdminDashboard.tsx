@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Package, ClipboardList, Plus, Pencil, Trash2, X, Search, LogOut, ArrowLeft, CircleAlert as AlertCircle, Upload } from "lucide-react";
+import { Package, ClipboardList, Plus, Pencil, Trash2, X, Search, LogOut, ArrowLeft, CircleAlert as AlertCircle, Upload, ChevronLeft, ChevronRight } from "lucide-react";
 import { api, supabase } from "@/lib/api";
 import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, FALLBACK_IMAGE } from "@/lib/types";
 import type { Product, Order, OrderStatus, Category } from "@/lib/types";
@@ -21,15 +21,24 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<Product | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const pageSize = 20;
 
   const loadProducts = useCallback(async () => {
     try {
-      const data = await api.getProducts();
-      setProducts(data);
+      const result = await api.getPaginatedProducts({
+        category: categoryFilter === "all" ? "All" : categoryFilter,
+        search,
+        page: currentPage,
+        pageSize,
+      });
+      setProducts(result.data);
+      setTotalProducts(result.totalCount);
     } catch (e) {
       console.error("Failed to load products:", e);
     }
-  }, []);
+  }, [categoryFilter, search, currentPage]);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -56,6 +65,10 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
       setLoading(false)
     );
   }, [loadProducts, loadCategories, loadOrders]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, categoryFilter]);
 
   const handleLogout = () => {
     api.logout();
@@ -87,6 +100,17 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
     await loadProducts();
     setDeleteConfirm(null);
   };
+
+  const totalPages = Math.ceil(totalProducts / pageSize) || 1;
+  const fromItem = totalProducts === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const toItem = Math.min(currentPage * pageSize, totalProducts);
+
+  const pageNumbers: number[] = [];
+  const maxVisiblePages = 5;
+  let startPage = Math.max(1, currentPage - 2);
+  const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+  startPage = Math.max(1, endPage - maxVisiblePages + 1);
+  for (let i = startPage; i <= endPage; i++) pageNumbers.push(i);
 
   const handleOrderStatusChange = async (orderId: string, status: OrderStatus) => {
     try {
@@ -127,7 +151,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
             onClick={() => setTab("products")}
             icon={<Package className="w-4 h-4" />}
             label="Products"
-            count={products.length}
+            count={totalProducts}
           />
           <TabButton
             active={tab === "orders"}
@@ -191,13 +215,21 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {filteredProducts.map((p) => (
+                    {products.map((p) => (
                       <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0">
                               {p.image_url && (
-                                <img src={p.image_url} alt="" className="w-full h-full object-cover" />
+                                <img
+                                  src={p.image_url}
+                                  alt=""
+                                  onError={(e) => {
+                                    e.currentTarget.onerror = null;
+                                    e.currentTarget.src = FALLBACK_IMAGE;
+                                  }}
+                                  className="w-full h-full object-cover"
+                                />
                               )}
                             </div>
                             <div>
@@ -251,9 +283,46 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                     ))}
                   </tbody>
                 </table>
-                {filteredProducts.length === 0 && (
+                {products.length === 0 && (
                   <div className="text-center py-12 text-gray-400 text-sm">No products found</div>
                 )}
+              </div>
+            )}
+
+            {!loading && totalProducts > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4">
+                <p className="text-xs text-gray-500">
+                  Showing {fromItem} to {toItem} of {totalProducts} products
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  {pageNumbers.map((num) => (
+                    <button
+                      key={num}
+                      onClick={() => setCurrentPage(num)}
+                      className={`w-8 h-8 text-sm font-medium rounded-lg transition-colors ${
+                        num === currentPage
+                          ? "bg-emerald-700 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             )}
           </div>

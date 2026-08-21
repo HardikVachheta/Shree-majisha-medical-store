@@ -1,4 +1,4 @@
-import { PackageSearch } from "lucide-react";
+import { PackageSearch, Loader as Loader2 } from "lucide-react";
 import ProductCard from "./ProductCard";
 import type { Product } from "@/lib/types";
 
@@ -6,9 +6,19 @@ interface ProductGridProps {
   products: Product[];
   onAddToCart: (product: Product, qty: number) => void;
   loading: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  sentinelRef: React.RefObject<HTMLDivElement>;
 }
 
-export default function ProductGrid({ products, onAddToCart, loading }: ProductGridProps) {
+export default function ProductGrid({
+  products,
+  onAddToCart,
+  loading,
+  hasMore,
+  loadingMore,
+  sentinelRef,
+}: ProductGridProps) {
   if (loading) {
     return (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -37,10 +47,24 @@ export default function ProductGrid({ products, onAddToCart, loading }: ProductG
   }
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-      {products.map((product) => (
-        <ProductCard key={product.id} product={product} onAddToCart={onAddToCart} />
-      ))}
-    </div>
+    <>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        {products.map((product) => (
+          <ProductCard key={product.id} product={product} onAddToCart={onAddToCart} />
+        ))}
+      </div>
+
+      <div ref={sentinelRef} className="w-full py-6 flex justify-center">
+        {loadingMore && (
+          <Loader2 className="w-6 h-6 text-emerald-600 animate-spin" />
+        )}
+      </div>
+
+      {!hasMore && products.length > 0 && !loadingMore && (
+        <p className="text-center text-xs text-gray-400 py-4">
+          You've reached the end of the catalog
+        </p>
+      )}
+    </>
   );
 }

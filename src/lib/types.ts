@@ -61,4 +61,5 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
   Delivered: "bg-emerald-100 text-emerald-700 border-emerald-200",
 };
 
-export const FALLBACK_IMAGE = "/vite.svg";
+export const FALLBACK_IMAGE =
+  "https://dhdymlzzwxxbuasqdako.supabase.co/storage/v1/object/public/product/medicine1.avif";

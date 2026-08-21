@@ -48,6 +48,48 @@ export const api = {
     return (data || []) as Product[];
   },
 
+  getPaginatedProducts: async ({
+    category = "All",
+    search = "",
+    page = 1,
+    pageSize = 20,
+  }: {
+    category?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ data: Product[]; totalCount: number; hasMore: boolean }> => {
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase
+      .from("products")
+      .select("*", { count: "exact" })
+      .order("created_at", { ascending: false });
+
+    if (category && category !== "All") {
+      query = query.eq("category_name", category);
+    }
+
+    if (search && search.trim()) {
+      query = query.ilike("name", `%${search.trim()}%`);
+    }
+
+    const { data, count, error } = await query.range(from, to);
+
+    if (error) {
+      console.error("Error fetching paginated products:", error.message);
+      return { data: [], totalCount: 0, hasMore: false };
+    }
+
+    const total = count || 0;
+    return {
+      data: (data || []) as Product[],
+      totalCount: total,
+      hasMore: to + 1 < total,
+    };
+  },
+
   createProduct: async (product: Omit<Product, "id" | "created_at">): Promise<Product> => {
     const { data, error } = await supabase
       .from("products")

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import TopBanner from "@/components/TopBanner";
 import Header from "@/components/Header";
 import ProductGrid from "@/components/ProductGrid";
@@ -9,16 +9,25 @@ import AdminDashboard from "@/components/AdminDashboard";
 import { api, supabase } from "@/lib/api";
 import type { Product, CartItem, Category } from "@/lib/types";
 
+const PAGE_SIZE = 20;
+
 function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [adminView, setAdminView] = useState(false);
+
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRef = useRef(false);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -33,28 +42,73 @@ function App() {
     }
   }, []);
 
-  const loadProducts = useCallback(async () => {
+  const loadFirstPage = useCallback(async () => {
     setLoading(true);
+    setPage(1);
     try {
-      const data = await api.getProducts();
-      setProducts(data);
+      const result = await api.getPaginatedProducts({
+        category: activeCategory === "all" ? "All" : activeCategory,
+        search: searchQuery,
+        page: 1,
+        pageSize: PAGE_SIZE,
+      });
+      setProducts(result.data);
+      setTotalCount(result.totalCount);
+      setHasMore(result.hasMore);
     } catch (e) {
       console.error("Failed to load products:", e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeCategory, searchQuery]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || !hasMore || loading) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    const nextPage = page + 1;
+    try {
+      const result = await api.getPaginatedProducts({
+        category: activeCategory === "all" ? "All" : activeCategory,
+        search: searchQuery,
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+      });
+      setProducts((prev) => [...prev, ...result.data]);
+      setPage(nextPage);
+      setHasMore(result.hasMore);
+    } catch (e) {
+      console.error("Failed to load more products:", e);
+    } finally {
+      setLoadingMore(false);
+      loadingMoreRef.current = false;
+    }
+  }, [hasMore, loading, page, activeCategory, searchQuery]);
 
   useEffect(() => {
     loadCategories();
-    loadProducts();
-  }, [loadCategories, loadProducts]);
+  }, [loadCategories]);
 
-  const filteredProducts = products.filter((p) => {
-    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = activeCategory === "all" || p.category_name === activeCategory;
-    return matchesSearch && matchesCategory;
-  });
+  useEffect(() => {
+    loadFirstPage();
+  }, [loadFirstPage]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          loadMore();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
 
   const handleAddToCart = (product: Product, qty: number) => {
     setCart((prev) => {
@@ -117,14 +171,17 @@ function App() {
             {activeCategory === "all" ? "All Products" : activeCategory}
           </h2>
           <p className="text-sm text-gray-500">
-            {filteredProducts.length} {filteredProducts.length === 1 ? "product" : "products"} available
+            {totalCount} {totalCount === 1 ? "product" : "products"} available
             with flat 15% OFF and free delivery in Ahmedabad
           </p>
         </div>
         <ProductGrid
-          products={filteredProducts}
+          products={products}
           onAddToCart={handleAddToCart}
           loading={loading}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          sentinelRef={sentinelRef}
         />
       </main>
 

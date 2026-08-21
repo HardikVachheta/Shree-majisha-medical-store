@@ -29,7 +29,11 @@ export default function ProductCard({ product, onAddToCart }: ProductCardProps) 
           src={imageSrc}
           alt={product.name}
           loading="lazy"
-          onError={() => setImgError(true)}
+          onError={(e) => {
+            e.currentTarget.onerror = null;
+            e.currentTarget.src = FALLBACK_IMAGE;
+            setImgError(true);
+          }}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
         />
         <span
