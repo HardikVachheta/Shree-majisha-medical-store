@@ -1,6 +1,6 @@
 import { X, ShieldCheck, Lock, User } from "lucide-react";
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { loginAdmin } from "@/lib/api";
 
 interface AdminLoginModalProps {
   open: boolean;
@@ -21,7 +21,7 @@ export default function AdminLoginModal({ open, onClose, onSuccess }: AdminLogin
     setError("");
     setLoading(true);
     try {
-      await api.login(username, password);
+      await loginAdmin({ username, password });
       onSuccess();
       setUsername("");
       setPassword("");

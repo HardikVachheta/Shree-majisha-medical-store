@@ -1,43 +1,46 @@
 import { supabase } from "./supabase";
 import type { Product, Order, OrderItem, OrderStatus } from "./types";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-const FUNCTION_URL = `${supabaseUrl}/functions/v1/admin-api`;
-
-function getPublicHeaders(): HeadersInit {
-  return {
-    "Content-Type": "application/json",
-    apikey: supabaseAnonKey,
-  };
-}
-
 export { supabase };
 
+export const loginAdmin = async (credentials: {
+  username?: string;
+  password?: string;
+}) => {
+  const ADMIN_USER = "darshan_thakur";
+  const ADMIN_PASS = "Majisha@Ahmedabad2026";
+
+  if (credentials.username !== ADMIN_USER || credentials.password !== ADMIN_PASS) {
+    throw new Error("Invalid username or password");
+  }
+
+  const session = {
+    token: `admin_session_${Date.now()}`,
+    username: ADMIN_USER,
+    role: "admin",
+  };
+  localStorage.setItem("majisha_admin_session", JSON.stringify(session));
+  return { success: true, ...session };
+};
+
 export const api = {
-  login: async (username: string, password: string) => {
-    const res = await fetch(`${FUNCTION_URL}/auth/login`, {
-      method: "POST",
-      headers: getPublicHeaders(),
-      body: JSON.stringify({ username, password }),
-    });
-    if (!res.ok) {
-      const errorBody = await res.json().catch(() => ({ error: `Login failed (${res.status})` }));
-      throw new Error(errorBody.error || `Login failed (${res.status})`);
-    }
-    const data = await res.json();
-    localStorage.setItem("admin_token", data.token);
-    localStorage.setItem("admin_username", data.username);
-    return data;
-  },
+  login: (username: string, password: string) =>
+    loginAdmin({ username, password }),
 
   logout: () => {
-    localStorage.removeItem("admin_token");
-    localStorage.removeItem("admin_username");
+    localStorage.removeItem("majisha_admin_session");
   },
 
-  isLoggedIn: () => !!localStorage.getItem("admin_token"),
+  isLoggedIn: () => {
+    const session = localStorage.getItem("majisha_admin_session");
+    if (!session) return false;
+    try {
+      const parsed = JSON.parse(session) as { token?: string; role?: string };
+      return parsed.role === "admin" && Boolean(parsed.token);
+    } catch {
+      return false;
+    }
+  },
 
   getProducts: async (): Promise<Product[]> => {
     const { data, error } = await supabase
