@@ -1,43 +1,46 @@
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
 import type { Product, Order, OrderItem, OrderStatus } from "./types";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+export { supabase };
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const loginAdmin = async (credentials: {
+  username?: string;
+  password?: string;
+}) => {
+  const ADMIN_USER = "darshan_thakur";
+  const ADMIN_PASS = "Majisha@Ahmedabad2026";
 
-const FUNCTION_URL = `${supabaseUrl}/functions/v1/admin-api`;
+  if (credentials.username !== ADMIN_USER || credentials.password !== ADMIN_PASS) {
+    throw new Error("Invalid username or password");
+  }
 
-function getPublicHeaders(): HeadersInit {
-  return {
-    "Content-Type": "application/json",
-    apikey: supabaseAnonKey,
+  const session = {
+    token: `admin_session_${Date.now()}`,
+    username: ADMIN_USER,
+    role: "admin",
   };
-}
+  localStorage.setItem("majisha_admin_session", JSON.stringify(session));
+  return { success: true, ...session };
+};
 
 export const api = {
-  login: async (username: string, password: string) => {
-    const res = await fetch(`${FUNCTION_URL}/auth/login`, {
-      method: "POST",
-      headers: getPublicHeaders(),
-      body: JSON.stringify({ username, password }),
-    });
-    if (!res.ok) {
-      const errorBody = await res.json().catch(() => ({ error: `Login failed (${res.status})` }));
-      throw new Error(errorBody.error || `Login failed (${res.status})`);
-    }
-    const data = await res.json();
-    localStorage.setItem("admin_token", data.token);
-    localStorage.setItem("admin_username", data.username);
-    return data;
-  },
+  login: (username: string, password: string) =>
+    loginAdmin({ username, password }),
 
   logout: () => {
-    localStorage.removeItem("admin_token");
-    localStorage.removeItem("admin_username");
+    localStorage.removeItem("majisha_admin_session");
   },
 
-  isLoggedIn: () => !!localStorage.getItem("admin_token"),
+  isLoggedIn: () => {
+    const session = localStorage.getItem("majisha_admin_session");
+    if (!session) return false;
+    try {
+      const parsed = JSON.parse(session) as { token?: string; role?: string };
+      return parsed.role === "admin" && Boolean(parsed.token);
+    } catch {
+      return false;
+    }
+  },
 
   getProducts: async (): Promise<Product[]> => {
     const { data, error } = await supabase
@@ -46,6 +49,48 @@ export const api = {
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return (data || []) as Product[];
+  },
+
+  getPaginatedProducts: async ({
+    category = "All",
+    search = "",
+    page = 1,
+    pageSize = 20,
+  }: {
+    category?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ data: Product[]; totalCount: number; hasMore: boolean }> => {
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase
+      .from("products")
+      .select("*", { count: "exact" })
+      .order("created_at", { ascending: false });
+
+    if (category && category !== "All") {
+      query = query.eq("category_name", category);
+    }
+
+    if (search && search.trim()) {
+      query = query.ilike("name", `%${search.trim()}%`);
+    }
+
+    const { data, count, error } = await query.range(from, to);
+
+    if (error) {
+      console.error("Error fetching paginated products:", error.message);
+      return { data: [], totalCount: 0, hasMore: false };
+    }
+
+    const total = count || 0;
+    return {
+      data: (data || []) as Product[],
+      totalCount: total,
+      hasMore: to + 1 < total,
+    };
   },
 
   createProduct: async (product: Omit<Product, "id" | "created_at">): Promise<Product> => {
@@ -62,10 +107,9 @@ export const api = {
         stock_quantity: product.stock_quantity,
         image_url: product.image_url,
       })
-      .select()
-      .single();
+      .select();
     if (error) throw new Error(error.message);
-    return data as Product;
+    return (data?.[0] ?? {}) as Product;
   },
 
   updateProduct: async (id: string, updates: Partial<Product>): Promise<Product> => {
@@ -92,10 +136,9 @@ export const api = {
       .from("products")
       .update(update)
       .eq("id", id)
-      .select()
-      .single();
+      .select();
     if (error) throw new Error(error.message);
-    return data as Product;
+    return (data?.[0] ?? {}) as Product;
   },
 
   deleteProduct: async (id: string): Promise<void> => {
@@ -105,11 +148,18 @@ export const api = {
 
   uploadProductImage: async (file: File): Promise<string> => {
     const ext = file.name.split(".").pop() || "jpg";
-    const fileName = `product-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const fileName = `product_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
     const { error: uploadError } = await supabase.storage
       .from("product")
-      .upload(fileName, file);
-    if (uploadError) throw new Error(uploadError.message);
+      .upload(fileName, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: file.type || `image/${ext}`,
+      });
+    if (uploadError) {
+      console.error("Storage upload error:", uploadError);
+      throw new Error("Image upload failed: " + uploadError.message);
+    }
     const { data } = supabase.storage.from("product").getPublicUrl(fileName);
     return data.publicUrl;
   },
@@ -124,8 +174,8 @@ export const api = {
     total_amount: number;
     delivery_fee: number;
     payment_method: string;
-  }): Promise<Order> => {
-    const { data, error } = await supabase
+  }): Promise<boolean> => {
+    const { error } = await supabase
       .from("orders")
       .insert({
         customer_name: order.customer_name,
@@ -139,11 +189,9 @@ export const api = {
         delivery_fee: order.delivery_fee,
         payment_method: order.payment_method,
         order_status: "Received",
-      })
-      .select()
-      .single();
+      });
     if (error) throw new Error(error.message);
-    return data as Order;
+    return true;
   },
 
   getOrders: async (): Promise<Order[]> => {

@@ -89,6 +89,7 @@ export default function CartDrawer({
       setPincode("");
       return true;
     } catch (e) {
+      console.error("Order submission error:", e);
       setError(e instanceof Error ? e.message : "Failed to place order");
       return false;
     } finally {
@@ -139,10 +140,14 @@ export default function CartDrawer({
         {orderSuccess ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
             <CheckCircle2 className="w-16 h-16 text-emerald-500 mb-4" />
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Order Placed!</h3>
-            <p className="text-sm text-gray-500 mb-6">
-              Your order has been received. We'll call you shortly to confirm delivery.
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Order Confirmed!</h3>
+            <p className="text-sm text-gray-500 mb-2">
+              Your order has been received successfully.
             </p>
+            <div className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium mb-6">
+              <Truck className="w-4 h-4" />
+              FREE Delivery in Ahmedabad
+            </div>
             <button
               onClick={onClose}
               className="px-6 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors"
