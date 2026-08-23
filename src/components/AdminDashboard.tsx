@@ -3,6 +3,7 @@ import { Package, ClipboardList, Plus, Pencil, Trash2, X, Search, LogOut, ArrowL
 import { api, supabase } from "@/lib/api";
 import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, FALLBACK_IMAGE } from "@/lib/types";
 import type { Product, Order, OrderStatus, Category } from "@/lib/types";
+import { useToast } from "@/components/Toast";
 
 interface AdminDashboardProps {
   onExit: () => void;
@@ -11,6 +12,7 @@ interface AdminDashboardProps {
 type Tab = "products" | "orders";
 
 export default function AdminDashboard({ onExit }: AdminDashboardProps) {
+  const { showToast } = useToast();
   const [tab, setTab] = useState<Tab>("products");
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -85,20 +87,33 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
     product: Omit<Product, "id" | "created_at">,
     id?: string
   ) => {
-    if (id) {
-      await api.updateProduct(id, product);
-    } else {
-      await api.createProduct(product);
+    try {
+      if (id) {
+        await api.updateProduct(id, product);
+        showToast(`Product '${product.name}' updated successfully!`);
+      } else {
+        await api.createProduct(product);
+        showToast(`Product '${product.name}' added successfully!`);
+      }
+      await loadProducts();
+      setShowProductModal(false);
+      setEditingProduct(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to save product", "error");
+      throw e;
     }
-    await loadProducts();
-    setShowProductModal(false);
-    setEditingProduct(null);
   };
 
   const handleDeleteProduct = async (id: string) => {
-    await api.deleteProduct(id);
-    await loadProducts();
-    setDeleteConfirm(null);
+    try {
+      await api.deleteProduct(id);
+      showToast("Product deleted successfully");
+      await loadProducts();
+      setDeleteConfirm(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to delete product", "error");
+      setDeleteConfirm(null);
+    }
   };
 
   const totalPages = Math.ceil(totalProducts / pageSize) || 1;
@@ -115,9 +130,10 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const handleOrderStatusChange = async (orderId: string, status: OrderStatus) => {
     try {
       await api.updateOrderStatus(orderId, status);
+      showToast("Order status updated successfully");
       await loadOrders();
     } catch (e) {
-      console.error("Failed to update order status:", e);
+      showToast(e instanceof Error ? e.message : "Failed to update order status", "error");
     }
   };
 

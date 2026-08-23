@@ -107,10 +107,9 @@ export const api = {
         stock_quantity: product.stock_quantity,
         image_url: product.image_url,
       })
-      .select()
-      .single();
+      .select();
     if (error) throw new Error(error.message);
-    return data as Product;
+    return (data?.[0] ?? {}) as Product;
   },
 
   updateProduct: async (id: string, updates: Partial<Product>): Promise<Product> => {
@@ -137,10 +136,9 @@ export const api = {
       .from("products")
       .update(update)
       .eq("id", id)
-      .select()
-      .single();
+      .select();
     if (error) throw new Error(error.message);
-    return data as Product;
+    return (data?.[0] ?? {}) as Product;
   },
 
   deleteProduct: async (id: string): Promise<void> => {
@@ -150,11 +148,18 @@ export const api = {
 
   uploadProductImage: async (file: File): Promise<string> => {
     const ext = file.name.split(".").pop() || "jpg";
-    const fileName = `product-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const fileName = `product_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
     const { error: uploadError } = await supabase.storage
       .from("product")
-      .upload(fileName, file);
-    if (uploadError) throw new Error(uploadError.message);
+      .upload(fileName, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: file.type || `image/${ext}`,
+      });
+    if (uploadError) {
+      console.error("Storage upload error:", uploadError);
+      throw new Error("Image upload failed: " + uploadError.message);
+    }
     const { data } = supabase.storage.from("product").getPublicUrl(fileName);
     return data.publicUrl;
   },
