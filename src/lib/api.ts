@@ -166,8 +166,8 @@ export const api = {
     total_amount: number;
     delivery_fee: number;
     payment_method: string;
-  }): Promise<Order> => {
-    const { data, error } = await supabase
+  }): Promise<boolean> => {
+    const { error } = await supabase
       .from("orders")
       .insert({
         customer_name: order.customer_name,
@@ -181,11 +181,9 @@ export const api = {
         delivery_fee: order.delivery_fee,
         payment_method: order.payment_method,
         order_status: "Received",
-      })
-      .select()
-      .single();
+      });
     if (error) throw new Error(error.message);
-    return data as Order;
+    return true;
   },
 
   getOrders: async (): Promise<Order[]> => {
