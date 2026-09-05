@@ -1,7 +1,9 @@
 import { supabase } from "./supabase";
-import type { Product, Order, OrderItem, OrderStatus } from "./types";
+import type { Product, Order, OrderItem, OrderStatus, Customer } from "./types";
 
 export { supabase };
+
+// ─── Admin auth (credential check, no Supabase Auth) ───────────────────────
 
 export const loginAdmin = async (credentials: {
   username?: string;
@@ -23,6 +25,87 @@ export const loginAdmin = async (credentials: {
   return { success: true, ...session };
 };
 
+// ─── Customer auth (stored in users table, session in localStorage) ─────────
+
+const CUSTOMER_SESSION_KEY = "majisha_customer_user";
+
+export const customerAuth = {
+  signUp: async (data: {
+    username: string;
+    email: string;
+    password: string;
+    phone?: string;
+    address_line?: string;
+    area?: string;
+    pincode?: string;
+  }): Promise<Customer> => {
+    // Check if email already exists
+    const { data: existing } = await supabase
+      .from("users")
+      .select("id")
+      .eq("email", data.email.trim().toLowerCase())
+      .maybeSingle();
+
+    if (existing) throw new Error("An account with this email already exists");
+
+    const { data: inserted, error } = await supabase
+      .from("users")
+      .insert({
+        username: data.username.trim(),
+        email: data.email.trim().toLowerCase(),
+        password: data.password,
+        phone: data.phone?.trim() || "",
+        address_line: data.address_line?.trim() || "",
+        area: data.area?.trim() || "Chandlodiya",
+        city: "Ahmedabad",
+        pincode: data.pincode?.trim() || "",
+      })
+      .select()
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!inserted) throw new Error("Failed to create account");
+
+    const customer = inserted as Customer;
+    localStorage.setItem(CUSTOMER_SESSION_KEY, JSON.stringify(customer));
+    return customer;
+  },
+
+  login: async (email: string, password: string): Promise<Customer> => {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email.trim().toLowerCase())
+      .eq("password", password)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!data) throw new Error("Invalid email or password");
+
+    const customer = data as Customer;
+    localStorage.setItem(CUSTOMER_SESSION_KEY, JSON.stringify(customer));
+    return customer;
+  },
+
+  logout: () => {
+    localStorage.removeItem(CUSTOMER_SESSION_KEY);
+  },
+
+  getSession: (): Customer | null => {
+    const raw = localStorage.getItem(CUSTOMER_SESSION_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as Customer;
+    } catch {
+      return null;
+    }
+  },
+
+  isLoggedIn: (): boolean => !!customerAuth.getSession(),
+};
+
+// ─── Admin session helpers ──────────────────────────────────────────────────
+
 export const api = {
   login: (username: string, password: string) =>
     loginAdmin({ username, password }),
@@ -41,6 +124,8 @@ export const api = {
       return false;
     }
   },
+
+  // ─── Products ─────────────────────────────────────────────────────────────
 
   getProducts: async (): Promise<Product[]> => {
     const { data, error } = await supabase
@@ -164,8 +249,11 @@ export const api = {
     return data.publicUrl;
   },
 
+  // ─── Orders ───────────────────────────────────────────────────────────────
+
   createOrder: async (order: {
     customer_name: string;
+    customer_email?: string;
     phone: string;
     address_line: string;
     area: string;
@@ -174,11 +262,12 @@ export const api = {
     total_amount: number;
     delivery_fee: number;
     payment_method: string;
-  }): Promise<boolean> => {
-    const { error } = await supabase
+  }): Promise<string> => {
+    const { data, error } = await supabase
       .from("orders")
       .insert({
         customer_name: order.customer_name,
+        customer_email: order.customer_email || null,
         phone: order.phone,
         address_line: order.address_line,
         area: order.area,
@@ -189,15 +278,26 @@ export const api = {
         delivery_fee: order.delivery_fee,
         payment_method: order.payment_method,
         order_status: "Received",
-      });
+      })
+      .select("id");
     if (error) throw new Error(error.message);
-    return true;
+    return (data?.[0]?.id as string) ?? "";
   },
 
   getOrders: async (): Promise<Order[]> => {
     const { data, error } = await supabase
       .from("orders")
       .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data || []) as Order[];
+  },
+
+  getOrdersByEmail: async (email: string): Promise<Order[]> => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("customer_email", email.trim().toLowerCase())
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return (data || []) as Order[];

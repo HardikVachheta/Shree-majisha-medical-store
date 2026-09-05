@@ -34,6 +34,7 @@ export type OrderStatus = "Received" | "Packed" | "Out for Delivery" | "Delivere
 export interface Order {
   id: string;
   customer_name: string;
+  customer_email?: string;
   phone: string;
   address_line: string;
   area: string;
@@ -44,6 +45,18 @@ export interface Order {
   delivery_fee: number;
   payment_method: string;
   order_status: OrderStatus;
+  created_at: string;
+}
+
+export interface Customer {
+  id: string;
+  username: string;
+  email: string;
+  phone: string;
+  address_line: string;
+  area: string;
+  city: string;
+  pincode: string;
   created_at: string;
 }
 
