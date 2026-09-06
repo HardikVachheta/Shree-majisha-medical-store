@@ -4,7 +4,8 @@ import {
   CircleAlert as AlertCircle, ShieldCheck, ArrowLeft,
 } from "lucide-react";
 import { auth } from "@/lib/api";
-import type { Customer, AuthRole } from "@/lib/types";
+import type { Customer } from "@/lib/types";
+import type { AuthRole } from "@/lib/api";
 
 interface LoginPageProps {
   onNavigate: (path: string) => void;

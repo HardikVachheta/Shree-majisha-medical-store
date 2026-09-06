@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { Package, ClipboardList, Plus, Pencil, Trash2, X, Search, LogOut, ArrowLeft, CircleAlert as AlertCircle, Upload, ChevronLeft, ChevronRight } from "lucide-react";
-import { api, supabase } from "@/lib/api";
+import {
+  Package, ClipboardList, Plus, Pencil, Trash2, X, Search, LogOut,
+  ArrowLeft, CircleAlert as AlertCircle, Upload, ChevronLeft, ChevronRight,
+  Filter, CheckSquare, Square,
+} from "lucide-react";
+import { api, supabase, auth } from "@/lib/api";
 import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, FALLBACK_IMAGE } from "@/lib/types";
 import type { Product, Order, OrderStatus, Category } from "@/lib/types";
 import { useToast } from "@/components/Toast";
@@ -10,6 +14,7 @@ interface AdminDashboardProps {
 }
 
 type Tab = "products" | "orders";
+type OrderFilter = "all" | "Received" | "Packed" | "Out for Delivery" | "Delivered" | "Closed";
 
 export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const { showToast } = useToast();
@@ -26,6 +31,15 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalProducts, setTotalProducts] = useState(0);
   const pageSize = 20;
+
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  // Order search + filter
+  const [orderSearch, setOrderSearch] = useState("");
+  const [orderFilter, setOrderFilter] = useState<OrderFilter>("all");
 
   const loadProducts = useCallback(async () => {
     try {
@@ -73,15 +87,68 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   }, [search, categoryFilter]);
 
   const handleLogout = () => {
-    api.logout();
+    auth.logout();
     onExit();
   };
 
-  const filteredProducts = products.filter((p) => {
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = categoryFilter === "all" || p.category_name === categoryFilter;
-    return matchesSearch && matchesCategory;
-  });
+  // ── Bulk selection helpers ────────────────────────────────────────────────
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (prev.size === products.length) return new Set();
+      return new Set(products.map((p) => p.id));
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const blocked = await api.checkProductsInActiveOrders(ids);
+      const deletable = ids.filter((id) => !blocked.has(id));
+
+      if (blocked.size > 0) {
+        const blockedProducts = products.filter((p) => blocked.has(p.id));
+        const names = blockedProducts.map((p) => p.name).join(", ");
+        showToast(
+          `Cannot delete: ${names} — linked to active pending orders. Close or complete related orders first.`,
+          "error"
+        );
+      }
+
+      let deletedCount = 0;
+      for (const id of deletable) {
+        try {
+          await api.deleteProduct(id);
+          deletedCount++;
+        } catch (e) {
+          console.error("Delete failed for", id, e);
+        }
+      }
+
+      if (deletedCount > 0) {
+        showToast(`${deletedCount} product(s) deleted successfully`);
+      }
+      await loadProducts();
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Bulk delete failed", "error");
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  // ── Product save/delete ───────────────────────────────────────────────────
 
   const handleSaveProduct = async (
     product: Omit<Product, "id" | "created_at">,
@@ -106,6 +173,16 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
 
   const handleDeleteProduct = async (id: string) => {
     try {
+      const blocked = await api.checkProductsInActiveOrders([id]);
+      if (blocked.has(id)) {
+        const p = products.find((pr) => pr.id === id);
+        showToast(
+          `Cannot delete product: "${p?.name || id}" is linked to active pending orders. Please close or complete related orders first.`,
+          "error"
+        );
+        setDeleteConfirm(null);
+        return;
+      }
       await api.deleteProduct(id);
       showToast("Product deleted successfully");
       await loadProducts();
@@ -115,6 +192,33 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
       setDeleteConfirm(null);
     }
   };
+
+  // ── Order status update ───────────────────────────────────────────────────
+
+  const handleOrderStatusChange = async (orderId: string, status: OrderStatus) => {
+    try {
+      await api.updateOrderStatus(orderId, status);
+      showToast("Order status updated successfully");
+      await loadOrders();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to update order status", "error");
+    }
+  };
+
+  // ── Filtered orders ───────────────────────────────────────────────────────
+
+  const filteredOrders = orders.filter((o) => {
+    const matchesFilter = orderFilter === "all" || o.order_status === orderFilter;
+    const q = orderSearch.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      o.customer_name.toLowerCase().includes(q) ||
+      o.phone.includes(q) ||
+      o.id.toLowerCase().includes(q);
+    return matchesFilter && matchesSearch;
+  });
+
+  // ── Pagination ─────────────────────────────────────────────────────────────
 
   const totalPages = Math.ceil(totalProducts / pageSize) || 1;
   const fromItem = totalProducts === 0 ? 0 : (currentPage - 1) * pageSize + 1;
@@ -127,18 +231,11 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   startPage = Math.max(1, endPage - maxVisiblePages + 1);
   for (let i = startPage; i <= endPage; i++) pageNumbers.push(i);
 
-  const handleOrderStatusChange = async (orderId: string, status: OrderStatus) => {
-    try {
-      await api.updateOrderStatus(orderId, status);
-      showToast("Order status updated successfully");
-      await loadOrders();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Failed to update order status", "error");
-    }
-  };
+  const allSelected = products.length > 0 && selectedIds.size === products.length;
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Header */}
       <div className="bg-emerald-700 text-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -161,6 +258,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Tabs */}
         <div className="flex gap-2 mb-6">
           <TabButton
             active={tab === "products"}
@@ -178,6 +276,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
           />
         </div>
 
+        {/* ── Products tab ──────────────────────────────────────────────────── */}
         {tab === "products" && (
           <div>
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
@@ -198,22 +297,34 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
               >
                 <option value="all">All Categories</option>
                 {categories.map((c) => (
-                  <option key={c.id} value={c.name}>
-                    {c.name}
-                  </option>
+                  <option key={c.id} value={c.name}>{c.name}</option>
                 ))}
               </select>
               <button
-                onClick={() => {
-                  setEditingProduct(null);
-                  setShowProductModal(true);
-                }}
+                onClick={() => { setEditingProduct(null); setShowProductModal(true); }}
                 className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 Add Product
               </button>
             </div>
+
+            {/* Bulk actions bar */}
+            {selectedIds.size > 0 && (
+              <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2.5 mb-3">
+                <span className="text-sm font-medium text-emerald-800">
+                  {selectedIds.size} selected
+                </span>
+                <button
+                  onClick={() => setBulkDeleteOpen(true)}
+                  disabled={bulkDeleting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Selected
+                </button>
+              </div>
+            )}
 
             {loading ? (
               <div className="text-center py-12 text-gray-400 text-sm">Loading...</div>
@@ -222,6 +333,11 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
                     <tr>
+                      <th className="px-4 py-3 text-center font-semibold w-10">
+                        <button onClick={toggleSelectAll} className="text-gray-500 hover:text-emerald-700">
+                          {allSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                        </button>
+                      </th>
                       <th className="px-4 py-3 text-left font-semibold">Product</th>
                       <th className="px-4 py-3 text-left font-semibold">Category</th>
                       <th className="px-4 py-3 text-right font-semibold">MRP</th>
@@ -232,7 +348,12 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {products.map((p) => (
-                      <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                      <tr key={p.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(p.id) ? "bg-emerald-50/50" : ""}`}>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => toggleSelect(p.id)} className="text-gray-400 hover:text-emerald-700">
+                            {selectedIds.has(p.id) ? <CheckSquare className="w-4 h-4 text-emerald-600" /> : <Square className="w-4 h-4" />}
+                          </button>
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0">
@@ -240,10 +361,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                                 <img
                                   src={p.image_url}
                                   alt=""
-                                  onError={(e) => {
-                                    e.currentTarget.onerror = null;
-                                    e.currentTarget.src = FALLBACK_IMAGE;
-                                  }}
+                                  onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_IMAGE; }}
                                   className="w-full h-full object-cover"
                                 />
                               )}
@@ -259,30 +377,17 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                             {p.category_name}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right text-gray-500 line-through">
-                          ₹{p.mrp.toFixed(2)}
-                        </td>
-                        <td className="px-4 py-3 text-right font-semibold text-emerald-700">
-                          ₹{p.selling_price.toFixed(2)}
-                        </td>
+                        <td className="px-4 py-3 text-right text-gray-500 line-through">₹{p.mrp.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-emerald-700">₹{p.selling_price.toFixed(2)}</td>
                         <td className="px-4 py-3 text-center">
-                          <span
-                            className={`px-2 py-1 text-xs font-medium rounded-full ${
-                              p.in_stock && p.stock_quantity > 0
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-red-100 text-red-700"
-                            }`}
-                          >
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${p.in_stock && p.stock_quantity > 0 ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
                             {p.stock_quantity}
                           </span>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-center gap-1">
                             <button
-                              onClick={() => {
-                                setEditingProduct(p);
-                                setShowProductModal(true);
-                              }}
+                              onClick={() => { setEditingProduct(p); setShowProductModal(true); }}
                               className="p-1.5 text-gray-500 hover:bg-blue-50 hover:text-blue-600 rounded-lg transition-colors"
                             >
                               <Pencil className="w-4 h-4" />
@@ -322,11 +427,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                     <button
                       key={num}
                       onClick={() => setCurrentPage(num)}
-                      className={`w-8 h-8 text-sm font-medium rounded-lg transition-colors ${
-                        num === currentPage
-                          ? "bg-emerald-700 text-white"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
+                      className={`w-8 h-8 text-sm font-medium rounded-lg transition-colors ${num === currentPage ? "bg-emerald-700 text-white" : "text-gray-600 hover:bg-gray-100"}`}
                     >
                       {num}
                     </button>
@@ -344,103 +445,115 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
           </div>
         )}
 
+        {/* ── Orders tab ────────────────────────────────────────────────────── */}
         {tab === "orders" && (
           <div className="space-y-4">
+            {/* Search + filter */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={orderSearch}
+                  onChange={(e) => setOrderSearch(e.target.value)}
+                  placeholder="Search by name, phone, or order ID..."
+                  className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto">
+                <Filter className="w-4 h-4 text-gray-400 shrink-0" />
+                {(["all", "Received", "Packed", "Out for Delivery", "Delivered", "Closed"] as OrderFilter[]).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setOrderFilter(f)}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap transition-colors ${
+                      orderFilter === f
+                        ? "bg-emerald-700 text-white"
+                        : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+                    }`}
+                  >
+                    {f === "all" ? "All Orders" : f}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {loading ? (
               <div className="text-center py-12 text-gray-400 text-sm">Loading...</div>
-            ) : orders.length === 0 ? (
+            ) : filteredOrders.length === 0 ? (
               <div className="text-center py-12 text-gray-400 text-sm">
-                No orders yet. Customer orders will appear here.
+                {orders.length === 0 ? "No orders yet. Customer orders will appear here." : "No orders match your search."}
               </div>
             ) : (
-              orders.map((order) => (
-                <div
-                  key={order.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm p-5"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-bold text-gray-900">{order.customer_name}</h3>
-                        <span
-                          className={`px-2 py-0.5 text-xs font-medium rounded-full border ${
-                            ORDER_STATUS_COLORS[order.order_status as OrderStatus] ||
-                            "bg-gray-100 text-gray-700 border-gray-200"
-                          }`}
-                        >
-                          {order.order_status}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-500">📞 {order.phone}</p>
-                      <p className="text-sm text-gray-500">
-                        📍 {order.address_line}
-                        {order.area ? `, ${order.area}` : ""}
-                        {order.pincode ? ` - ${order.pincode}` : ""}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        {new Date(order.created_at).toLocaleString("en-IN")}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs text-gray-400">{order.payment_method}</p>
-                      <p className="text-lg font-bold text-emerald-700">
-                        ₹{order.total_amount.toFixed(2)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-gray-50 pt-3">
-                    <div className="space-y-1 mb-3">
-                      {order.items.map((item, idx) => (
-                        <div
-                          key={idx}
-                          className="flex justify-between text-sm text-gray-600"
-                        >
-                          <span>
-                            {item.name}{" "}
-                            <span className="text-gray-400">(Qty: {item.quantity})</span>
+              filteredOrders.map((order) => {
+                const shortId = order.id.slice(-6).toUpperCase();
+                return (
+                  <div key={order.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-xs text-gray-400">#ORD-{shortId}</span>
+                          <h3 className="font-bold text-gray-900">{order.customer_name}</h3>
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${ORDER_STATUS_COLORS[order.order_status as OrderStatus] || "bg-gray-100 text-gray-700 border-gray-200"}`}>
+                            {order.order_status}
                           </span>
-                          <span>₹{(item.price * item.quantity).toFixed(2)}</span>
                         </div>
-                      ))}
+                        <p className="text-sm text-gray-500">📞 {order.phone}</p>
+                        <p className="text-sm text-gray-500">
+                          📍 {order.address_line}{order.area ? `, ${order.area}` : ""}{order.pincode ? ` - ${order.pincode}` : ""}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {new Date(order.created_at).toLocaleString("en-IN")}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xs text-gray-400">{order.payment_method}</p>
+                        <p className="text-lg font-bold text-emerald-700">₹{order.total_amount.toFixed(2)}</p>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-gray-500">Update Status:</label>
-                      <select
-                        value={order.order_status}
-                        onChange={(e) =>
-                          handleOrderStatusChange(order.id, e.target.value as OrderStatus)
-                        }
-                        className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                      >
-                        {(Object.keys(ORDER_STATUS_LABELS) as OrderStatus[]).map((s) => (
-                          <option key={s} value={s}>
-                            {ORDER_STATUS_LABELS[s]}
-                          </option>
+                    <div className="border-t border-gray-50 pt-3">
+                      <div className="space-y-1 mb-3">
+                        {order.items.map((item, idx) => (
+                          <div key={idx} className="flex justify-between text-sm text-gray-600">
+                            <span>{item.name} <span className="text-gray-400">(Qty: {item.quantity})</span></span>
+                            <span>₹{(item.price * item.quantity).toFixed(2)}</span>
+                          </div>
                         ))}
-                      </select>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-medium text-gray-500">Update Status:</label>
+                        <select
+                          value={order.order_status}
+                          onChange={(e) => handleOrderStatusChange(order.id, e.target.value as OrderStatus)}
+                          className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                        >
+                          {(Object.keys(ORDER_STATUS_LABELS) as OrderStatus[]).map((s) => (
+                            <option key={s} value={s}>{ORDER_STATUS_LABELS[s]}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}
       </div>
 
+      {/* Product modal */}
       {showProductModal && (
         <ProductModal
           product={editingProduct}
           categories={categories}
-          onClose={() => {
-            setShowProductModal(false);
-            setEditingProduct(null);
-          }}
+          onClose={() => { setShowProductModal(false); setEditingProduct(null); }}
           onSave={handleSaveProduct}
         />
       )}
 
+      {/* Single delete confirm */}
       {deleteConfirm && (
         <DeleteConfirmModal
           product={deleteConfirm}
@@ -448,30 +561,30 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
           onConfirm={() => handleDeleteProduct(deleteConfirm.id)}
         />
       )}
+
+      {/* Bulk delete confirm */}
+      {bulkDeleteOpen && (
+        <BulkDeleteModal
+          count={selectedIds.size}
+          onCancel={() => setBulkDeleteOpen(false)}
+          onConfirm={handleBulkDelete}
+          deleting={bulkDeleting}
+        />
+      )}
     </div>
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-  count,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  count: number;
+// ─── Helper components ──────────────────────────────────────────────────────
+
+function TabButton({ active, onClick, icon, label, count }: {
+  active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count: number;
 }) {
   return (
     <button
       onClick={onClick}
       className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-lg transition-colors ${
-        active
-          ? "bg-emerald-700 text-white"
-          : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+        active ? "bg-emerald-700 text-white" : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
       }`}
     >
       {icon}
@@ -483,21 +596,12 @@ function TabButton({
   );
 }
 
-function ProductModal({
-  product,
-  categories,
-  onClose,
-  onSave,
-}: {
-  product: Product | null;
-  categories: Category[];
-  onClose: () => void;
-  onSave: (product: Omit<Product, "id" | "created_at">, id?: string) => void;
+function ProductModal({ product, categories, onClose, onSave }: {
+  product: Product | null; categories: Category[];
+  onClose: () => void; onSave: (product: Omit<Product, "id" | "created_at">, id?: string) => void;
 }) {
   const [name, setName] = useState(product?.name || "");
-  const [categoryName, setCategoryName] = useState(
-    product?.category_name || categories[0]?.name || ""
-  );
+  const [categoryName, setCategoryName] = useState(product?.category_name || categories[0]?.name || "");
   const [mrp, setMrp] = useState(product?.mrp?.toString() || "");
   const [sellingPrice, setSellingPrice] = useState(product?.selling_price?.toString() || "");
   const [stockQty, setStockQty] = useState(product?.stock_quantity?.toString() || "0");
@@ -508,9 +612,7 @@ function ProductModal({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const computedSellingPrice = mrp
-    ? (Math.round(parseFloat(mrp) * 0.85 * 100) / 100).toFixed(2)
-    : "";
+  const computedSellingPrice = mrp ? (Math.round(parseFloat(mrp) * 0.85 * 100) / 100).toFixed(2) : "";
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -537,17 +639,10 @@ function ProductModal({
     try {
       await onSave(
         {
-          name,
-          category_name: categoryName,
-          mrp: mrpNum,
-          selling_price: sellingPrice
-            ? parseFloat(sellingPrice)
-            : parseFloat(computedSellingPrice),
-          discount_percentage: 15,
-          stock_quantity: parseInt(stockQty) || 0,
-          in_stock: inStock,
-          unit,
-          image_url: imageUrl,
+          name, category_name: categoryName, mrp: mrpNum,
+          selling_price: sellingPrice ? parseFloat(sellingPrice) : parseFloat(computedSellingPrice),
+          discount_percentage: 15, stock_quantity: parseInt(stockQty) || 0,
+          in_stock: inStock, unit, image_url: imageUrl,
         },
         product?.id
       );
@@ -563,9 +658,7 @@ function ProductModal({
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b border-gray-100 sticky top-0 bg-white z-10">
-          <h2 className="font-bold text-gray-900">
-            {product ? "Edit Product" : "Add New Product"}
-          </h2>
+          <h2 className="font-bold text-gray-900">{product ? "Edit Product" : "Add New Product"}</h2>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
             <X className="w-5 h-5 text-gray-500" />
           </button>
@@ -573,86 +666,50 @@ function ProductModal({
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <Field label="Product Name">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              placeholder="e.g. Dolo 650"
-            />
+              placeholder="e.g. Dolo 650" />
           </Field>
 
           <Field label="Category">
-            <select
-              value={categoryName}
-              onChange={(e) => setCategoryName(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-            >
-              {categories.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
+            <select value={categoryName} onChange={(e) => setCategoryName(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+              {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="MRP (₹)">
-              <input
-                type="number"
-                step="0.01"
-                value={mrp}
-                onChange={(e) => setMrp(e.target.value)}
+              <input type="number" step="0.01" value={mrp} onChange={(e) => setMrp(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                placeholder="0.00"
-              />
+                placeholder="0.00" />
             </Field>
             <Field label="Selling Price (₹)">
-              <input
-                type="number"
-                step="0.01"
-                value={sellingPrice || computedSellingPrice}
+              <input type="number" step="0.01" value={sellingPrice || computedSellingPrice}
                 onChange={(e) => setSellingPrice(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-emerald-50"
-                placeholder="Auto-calculated"
-              />
+                placeholder="Auto-calculated" />
             </Field>
           </div>
-          {mrp && (
-            <p className="text-xs text-emerald-600 font-medium">
-              15% OFF applied: ₹{computedSellingPrice} (auto-calculated, editable)
-            </p>
-          )}
+          {mrp && <p className="text-xs text-emerald-600 font-medium">15% OFF applied: ₹{computedSellingPrice} (auto-calculated, editable)</p>}
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Stock Quantity">
-              <input
-                type="number"
-                value={stockQty}
-                onChange={(e) => setStockQty(e.target.value)}
+              <input type="number" value={stockQty} onChange={(e) => setStockQty(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                placeholder="0"
-              />
+                placeholder="0" />
             </Field>
             <Field label="Unit">
-              <input
-                type="text"
-                value={unit}
-                onChange={(e) => setUnit(e.target.value)}
+              <input type="text" value={unit} onChange={(e) => setUnit(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                placeholder="e.g. Strip of 10"
-              />
+                placeholder="e.g. Strip of 10" />
             </Field>
           </div>
 
           <Field label="In Stock">
             <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={inStock}
-                onChange={(e) => setInStock(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-              />
+              <input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
               <span className="text-sm text-gray-700">Available for purchase</span>
             </label>
           </Field>
@@ -660,35 +717,17 @@ function ProductModal({
           <Field label="Product Image">
             <div className="flex items-center gap-3">
               <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 shrink-0">
-                {imageUrl && (
-                  <img
-                    src={imageUrl}
-                    alt="preview"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = FALLBACK_IMAGE;
-                    }}
-                    className="w-full h-full object-cover"
-                  />
-                )}
+                {imageUrl && <img src={imageUrl} alt="preview" onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_IMAGE; }} className="w-full h-full object-cover" />}
               </div>
               <label className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">
                 <Upload className="w-4 h-4" />
                 {uploading ? "Uploading..." : "Upload Image"}
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                />
+                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
               </label>
             </div>
-            <input
-              type="text"
-              value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
+            <input type="text" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)}
               className="w-full mt-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              placeholder="Or paste image URL..."
-            />
+              placeholder="Or paste image URL..." />
           </Field>
 
           {error && (
@@ -699,18 +738,12 @@ function ProductModal({
           )}
 
           <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-            >
+            <button type="button" onClick={onClose}
+              className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex-1 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors disabled:opacity-50"
-            >
+            <button type="submit" disabled={saving}
+              className="flex-1 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors disabled:opacity-50">
               {saving ? "Saving..." : product ? "Update Product" : "Add Product"}
             </button>
           </div>
@@ -729,14 +762,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function DeleteConfirmModal({
-  product,
-  onCancel,
-  onConfirm,
-}: {
-  product: Product;
-  onCancel: () => void;
-  onConfirm: () => void;
+function DeleteConfirmModal({ product, onCancel, onConfirm }: {
+  product: Product; onCancel: () => void; onConfirm: () => void;
 }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -750,17 +777,32 @@ function DeleteConfirmModal({
           Are you sure you want to delete "{product.name}"? This cannot be undone.
         </p>
         <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="flex-1 py-2.5 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 transition-colors"
-          >
-            Delete
+          <button onClick={onCancel} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 py-2.5 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 transition-colors">Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BulkDeleteModal({ count, onCancel, onConfirm, deleting }: {
+  count: number; onCancel: () => void; onConfirm: () => void; deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
+        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Trash2 className="w-6 h-6 text-red-500" />
+        </div>
+        <h3 className="font-bold text-gray-900 mb-2">Delete {count} Products?</h3>
+        <p className="text-sm text-gray-500 mb-5">
+          Products linked to active pending orders will be protected from deletion. Are you sure you want to proceed?
+        </p>
+        <div className="flex gap-3">
+          <button onClick={onCancel} disabled={deleting} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">Cancel</button>
+          <button onClick={onConfirm} disabled={deleting} className="flex-1 py-2.5 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50">
+            {deleting ? "Deleting..." : `Delete ${count}`}
           </button>
         </div>
       </div>

@@ -3,13 +3,13 @@ import TopBanner from "@/components/TopBanner";
 import Header from "@/components/Header";
 import ProductGrid from "@/components/ProductGrid";
 import Footer from "@/components/Footer";
-import AuthModal from "@/components/AuthModal";
 import AdminPage from "@/pages/AdminPage";
 import LoginPage from "@/pages/LoginPage";
 import CartPage from "@/pages/CartPage";
 import MyOrdersPage from "@/pages/MyOrdersPage";
 import { api, auth, supabase } from "@/lib/api";
-import type { Product, CartItem, Category, Customer, AuthRole } from "@/lib/types";
+import type { Product, CartItem, Category, Customer } from "@/lib/types";
+import type { AuthRole } from "@/lib/api";
 
 const PAGE_SIZE = 20;
 
@@ -48,7 +48,6 @@ function App() {
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(auth.getCustomer());
-  const [authModalOpen, setAuthModalOpen] = useState(false);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
@@ -168,7 +167,7 @@ function App() {
 
   // ── /admin route — isolated, no shared header/footer ──────────────────────
   if (route === "/admin") {
-    return <AdminPage />;
+    return <AdminPage onNavigate={navigate} />;
   }
 
   // ── /login route — standalone page ────────────────────────────────────────

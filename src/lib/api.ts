@@ -413,6 +413,10 @@ export function openRazorpayCheckout(options: {
   onSuccess: (paymentId: string) => void;
   onFailure?: (error: string) => void;
 }): void {
+  if (!window.Razorpay) {
+    options.onFailure?.("Razorpay checkout not loaded");
+    return;
+  }
   const rzp = new window.Razorpay({
     key: RAZORPAY_KEY_ID,
     amount: Math.round(options.amount * 100),
