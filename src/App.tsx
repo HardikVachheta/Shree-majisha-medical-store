@@ -5,10 +5,11 @@ import ProductGrid from "@/components/ProductGrid";
 import Footer from "@/components/Footer";
 import AuthModal from "@/components/AuthModal";
 import AdminPage from "@/pages/AdminPage";
+import LoginPage from "@/pages/LoginPage";
 import CartPage from "@/pages/CartPage";
 import MyOrdersPage from "@/pages/MyOrdersPage";
-import { api, customerAuth, supabase } from "@/lib/api";
-import type { Product, CartItem, Category, Customer } from "@/lib/types";
+import { api, auth, supabase } from "@/lib/api";
+import type { Product, CartItem, Category, Customer, AuthRole } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
@@ -46,7 +47,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [customer, setCustomer] = useState<Customer | null>(customerAuth.getSession());
+  const [customer, setCustomer] = useState<Customer | null>(auth.getCustomer());
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -122,6 +123,7 @@ function App() {
     return () => observer.disconnect();
   }, [loadMore, route]);
 
+  // Stay on page — just increment cart badge, no navigation
   const handleAddToCart = (product: Product, qty: number) => {
     setCart((prev) => {
       const existing = prev.findIndex((item) => item.product.id === product.id);
@@ -132,7 +134,6 @@ function App() {
       }
       return [...prev, { product, qty }];
     });
-    navigate("/cart");
   };
 
   const handleUpdateQty = (index: number, qty: number) => {
@@ -150,17 +151,17 @@ function App() {
   const handleClearCart = () => setCart([]);
 
   const handleLogout = () => {
-    customerAuth.logout();
+    auth.logout();
     setCustomer(null);
     if (route === "/my-orders") navigate("/");
   };
 
-  const handleAuthSuccess = (c: Customer) => {
-    setCustomer(c);
+  const handleAuthSuccess = (role: AuthRole, cust?: Customer) => {
+    if (role === "user" && cust) setCustomer(cust);
   };
 
   const handleAuthRequired = () => {
-    setAuthModalOpen(true);
+    navigate("/login");
   };
 
   const cartCount = cart.reduce((sum, item) => sum + item.qty, 0);
@@ -168,6 +169,16 @@ function App() {
   // ── /admin route — isolated, no shared header/footer ──────────────────────
   if (route === "/admin") {
     return <AdminPage />;
+  }
+
+  // ── /login route — standalone page ────────────────────────────────────────
+  if (route === "/login") {
+    return (
+      <LoginPage
+        onNavigate={navigate}
+        onAuthSuccess={handleAuthSuccess}
+      />
+    );
   }
 
   // ── Shared storefront shell ───────────────────────────────────────────────
@@ -186,7 +197,7 @@ function App() {
         cartCount={cartCount}
         onCartClick={() => navigate("/cart")}
         customer={customer}
-        onLoginClick={() => setAuthModalOpen(true)}
+        onLoginClick={() => navigate("/login")}
         onLogout={handleLogout}
         onMyOrders={() => navigate("/my-orders")}
       />
@@ -232,12 +243,6 @@ function App() {
       </main>
 
       <Footer />
-
-      <AuthModal
-        open={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
-        onSuccess={handleAuthSuccess}
-      />
     </div>
   );
 }

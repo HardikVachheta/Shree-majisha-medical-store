@@ -29,7 +29,7 @@ export interface OrderItem {
   price: number;
 }
 
-export type OrderStatus = "Received" | "Packed" | "Out for Delivery" | "Delivered";
+export type OrderStatus = "Received" | "Packed" | "Out for Delivery" | "Delivered" | "Closed";
 
 export interface Order {
   id: string;
@@ -44,6 +44,7 @@ export interface Order {
   total_amount: number;
   delivery_fee: number;
   payment_method: string;
+  payment_id?: string;
   order_status: OrderStatus;
   created_at: string;
 }
@@ -57,6 +58,7 @@ export interface Customer {
   area: string;
   city: string;
   pincode: string;
+  role: string;
   created_at: string;
 }
 
@@ -65,6 +67,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   Packed: "Packed",
   "Out for Delivery": "Out for Delivery",
   Delivered: "Delivered",
+  Closed: "Closed",
 };
 
 export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
@@ -72,6 +75,7 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
   Packed: "bg-amber-100 text-amber-700 border-amber-200",
   "Out for Delivery": "bg-purple-100 text-purple-700 border-purple-200",
   Delivered: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Closed: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
 export const FALLBACK_IMAGE =

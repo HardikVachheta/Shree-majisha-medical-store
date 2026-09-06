@@ -2,10 +2,10 @@ import { useState, useEffect } from "react";
 import {
   ShoppingCart, Trash2, Plus, Minus, Truck, Tag, MessageCircle,
   CircleCheck as CheckCircle2, Package, Copy, CreditCard, Banknote,
-  ArrowLeft, MapPin,
+  ArrowLeft, MapPin, Lock,
 } from "lucide-react";
 import type { CartItem, Customer } from "@/lib/types";
-import { api } from "@/lib/api";
+import { api, updateCustomerAddress, loadRazorpay, openRazorpayCheckout } from "@/lib/api";
 import { buildWhatsAppMessage, buildWhatsAppUrl } from "@/lib/whatsapp";
 import { FALLBACK_IMAGE } from "@/lib/types";
 
@@ -19,7 +19,7 @@ interface CartPageProps {
   onAuthRequired: () => void;
 }
 
-type PaymentMethod = "cod" | "upi";
+type PaymentMethod = "cod" | "online";
 
 interface ConfirmedOrder {
   id: string;
@@ -29,6 +29,7 @@ interface ConfirmedOrder {
   address: string;
   area: string;
   paymentMethod: PaymentMethod;
+  paymentId?: string;
 }
 
 export default function CartPage({
@@ -46,8 +47,6 @@ export default function CartPage({
   const [area, setArea] = useState(customer?.area || "Chandlodiya");
   const [pincode, setPincode] = useState(customer?.pincode || "");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cod");
-  const [upiRef, setUpiRef] = useState("");
-  const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState<ConfirmedOrder | null>(null);
@@ -66,15 +65,6 @@ export default function CartPage({
   const savings = cart.reduce((s, i) => s + (i.product.mrp - i.product.selling_price) * i.qty, 0);
   const total = mrpTotal - savings;
 
-  const UPI_ID = "8112211879@upi";
-  const upiQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=upi://pay?pa=${UPI_ID}&pn=ShreeMajishaMedical&am=${total.toFixed(2)}&cu=INR`;
-
-  const copyUpiId = () => {
-    navigator.clipboard.writeText(UPI_ID).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   const validate = () => {
     if (!name.trim()) return "Please enter your name";
     if (!/^\d{10}$/.test(phone)) return "Please enter a valid 10-digit phone number";
@@ -82,39 +72,99 @@ export default function CartPage({
     return null;
   };
 
+  const saveAddressIfNeeded = async () => {
+    if (!customer) return;
+    const addrChanged =
+      customer.phone !== phone ||
+      customer.address_line !== address ||
+      customer.area !== area ||
+      customer.pincode !== pincode;
+    if (addrChanged) {
+      try {
+        await updateCustomerAddress(customer.id, { phone, address_line: address, area, pincode });
+      } catch (e) {
+        console.error("Failed to save address:", e);
+      }
+    }
+  };
+
+  const insertOrder = async (paymentId?: string): Promise<string> => {
+    const items = cart.map((i) => ({
+      name: i.product.name,
+      quantity: i.qty,
+      price: i.product.selling_price,
+    }));
+    const payLabel = paymentId
+      ? "Razorpay UPI/Card"
+      : "Cash on Delivery";
+
+    return api.createOrder({
+      customer_name: name,
+      customer_email: customer?.email,
+      phone,
+      address_line: address,
+      area,
+      pincode,
+      items,
+      total_amount: total,
+      delivery_fee: 0,
+      payment_method: payLabel,
+      payment_id: paymentId,
+    });
+  };
+
   const handlePlaceOrder = async () => {
+    // Auth guard — block guests
+    if (!customer) {
+      setError("Please log in or register to place your order");
+      onAuthRequired();
+      return;
+    }
+
     const err = validate();
     if (err) { setError(err); return; }
     setError("");
     setSubmitting(true);
     try {
-      const items = cart.map((i) => ({
-        name: i.product.name,
-        quantity: i.qty,
-        price: i.product.selling_price,
-      }));
-      const payLabel = paymentMethod === "upi"
-        ? `UPI / QR${upiRef ? ` (Ref: ${upiRef})` : ""}`
-        : "Cash on Delivery";
+      await saveAddressIfNeeded();
 
-      const orderId = await api.createOrder({
-        customer_name: name,
-        customer_email: customer?.email,
-        phone,
-        address_line: address,
-        area,
-        pincode,
-        items,
-        total_amount: total,
-        delivery_fee: 0,
-        payment_method: payLabel,
-      });
-
-      setConfirmedOrder({ id: orderId, total, customerName: name, phone, address, area, paymentMethod });
-      onClear();
+      if (paymentMethod === "online") {
+        await loadRazorpay();
+        openRazorpayCheckout({
+          amount: total,
+          name: name,
+          email: customer.email,
+          phone: phone,
+          onSuccess: async (paymentId: string) => {
+            try {
+              const orderId = await insertOrder(paymentId);
+              setConfirmedOrder({
+                id: orderId, total, customerName: name, phone, address, area,
+                paymentMethod: "online", paymentId,
+              });
+              onClear();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Failed to place order after payment");
+            } finally {
+              setSubmitting(false);
+            }
+          },
+          onFailure: (errMsg: string) => {
+            setError(errMsg || "Payment failed");
+            setSubmitting(false);
+          },
+        });
+      } else {
+        const orderId = await insertOrder();
+        setConfirmedOrder({
+          id: orderId, total, customerName: name, phone, address, area,
+          paymentMethod: "cod",
+        });
+        onClear();
+        setSubmitting(false);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to place order. Please try again.");
-    } finally {
       setSubmitting(false);
     }
   };
@@ -152,9 +202,15 @@ export default function CartPage({
           <div className="flex justify-between text-sm">
             <span className="text-gray-500">Payment</span>
             <span className="font-medium text-gray-700">
-              {confirmedOrder.paymentMethod === "upi" ? "UPI / QR Code" : "Cash on Delivery"}
+              {confirmedOrder.paymentMethod === "online" ? "Razorpay UPI/Card" : "Cash on Delivery"}
             </span>
           </div>
+          {confirmedOrder.paymentId && (
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-400">Payment ID</span>
+              <span className="font-mono text-gray-500">{confirmedOrder.paymentId}</span>
+            </div>
+          )}
           <div className="flex items-center gap-1 text-sm text-emerald-600 font-medium pt-1">
             <Truck className="w-4 h-4" />
             FREE Delivery in Ahmedabad
@@ -306,23 +362,29 @@ export default function CartPage({
             </div>
           </div>
 
+          {/* Auth guard notice */}
+          {!customer && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-2.5">
+              <Lock className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-amber-800">Login required to checkout</p>
+                <p className="text-xs text-amber-600 mt-0.5">
+                  Please{" "}
+                  <button onClick={onAuthRequired} className="font-semibold underline hover:no-underline">
+                    log in or register
+                  </button>{" "}
+                  to place your order.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Delivery address */}
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-1.5">
               <MapPin className="w-4 h-4 text-emerald-700" />
               Delivery Details
             </h3>
-            {!customer && (
-              <div className="bg-emerald-50 rounded-lg p-3 mb-3 text-xs text-emerald-700">
-                <button
-                  onClick={onAuthRequired}
-                  className="font-semibold underline hover:no-underline"
-                >
-                  Login
-                </button>{" "}
-                to auto-fill your saved address and track orders.
-              </div>
-            )}
             <div className="space-y-2">
               <input
                 type="text"
@@ -393,7 +455,7 @@ export default function CartPage({
 
               <label
                 className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                  paymentMethod === "upi"
+                  paymentMethod === "online"
                     ? "border-emerald-500 bg-emerald-50"
                     : "border-gray-200 hover:border-gray-300"
                 }`}
@@ -401,48 +463,19 @@ export default function CartPage({
                 <input
                   type="radio"
                   name="payment"
-                  checked={paymentMethod === "upi"}
-                  onChange={() => setPaymentMethod("upi")}
+                  checked={paymentMethod === "online"}
+                  onChange={() => setPaymentMethod("online")}
                   className="mt-0.5 accent-emerald-700"
                 />
                 <div>
                   <div className="flex items-center gap-1.5 font-semibold text-sm text-gray-900">
                     <CreditCard className="w-4 h-4 text-emerald-700" />
-                    Instant UPI / QR Payment
+                    Online / UPI Payment (Razorpay)
                   </div>
-                  <p className="text-xs text-gray-500 mt-0.5">Scan QR code and pay instantly</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Pay securely via UPI, card, or netbanking</p>
                 </div>
               </label>
             </div>
-
-            {/* UPI details */}
-            {paymentMethod === "upi" && (
-              <div className="mt-4 border-t border-gray-100 pt-4 text-center">
-                <img
-                  src={upiQrUrl}
-                  alt="UPI QR Code"
-                  className="w-[180px] h-[180px] mx-auto rounded-lg border border-gray-200 mb-3"
-                />
-                <p className="text-xs text-gray-500 mb-1.5">Scan with any UPI app</p>
-                <div className="flex items-center justify-center gap-2 bg-gray-50 rounded-lg px-3 py-2 mb-3">
-                  <span className="font-mono text-sm font-bold text-gray-800">{UPI_ID}</span>
-                  <button
-                    onClick={copyUpiId}
-                    className="text-emerald-700 hover:text-emerald-800 transition-colors"
-                    title="Copy UPI ID"
-                  >
-                    {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-                <input
-                  type="text"
-                  placeholder="Transaction Reference ID (optional)"
-                  value={upiRef}
-                  onChange={(e) => setUpiRef(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-            )}
           </div>
 
           {error && (
@@ -457,7 +490,7 @@ export default function CartPage({
             className="w-full py-3 bg-emerald-700 text-white font-bold rounded-xl hover:bg-emerald-800 transition-colors disabled:opacity-50 text-sm"
           >
             {submitting
-              ? "Placing Order..."
+              ? "Processing..."
               : `Confirm Order — ₹${total.toFixed(2)}`}
           </button>
         </div>
