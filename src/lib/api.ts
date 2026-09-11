@@ -293,33 +293,39 @@ export const api = {
     customer_email?: string;
     phone: string;
     address_line: string;
-    area: string;
-    pincode: string;
+    area?: string;
+    city?: string;
+    pincode?: string;
     items: OrderItem[];
     total_amount: number;
-    delivery_fee: number;
+    delivery_fee?: number;
     payment_method: string;
-    payment_id?: string;
+    payment_id?: string | null;
+    order_status?: string;
   }): Promise<string> => {
+    const payload: Record<string, unknown> = {
+      customer_name: order.customer_name,
+      customer_email: order.customer_email || null,
+      phone: order.phone,
+      address_line: order.address_line,
+      area: order.area || "Chandlodiya",
+      city: order.city || "Ahmedabad",
+      pincode: order.pincode || "",
+      items: order.items,
+      total_amount: order.total_amount,
+      delivery_fee: 0,
+      payment_method: order.payment_method,
+      payment_id: order.payment_id || null,
+      order_status: order.order_status || "Received",
+    };
     const { data, error } = await supabase
       .from("orders")
-      .insert({
-        customer_name: order.customer_name,
-        customer_email: order.customer_email || null,
-        phone: order.phone,
-        address_line: order.address_line,
-        area: order.area,
-        city: "Ahmedabad",
-        pincode: order.pincode,
-        items: order.items,
-        total_amount: order.total_amount,
-        delivery_fee: order.delivery_fee,
-        payment_method: order.payment_method,
-        payment_id: order.payment_id || null,
-        order_status: "Received",
-      })
-      .select("id");
-    if (error) throw new Error(error.message);
+      .insert([payload])
+      .select();
+    if (error) {
+      console.error("Order insertion error:", error);
+      throw new Error(error.message);
+    }
     return (data?.[0]?.id as string) ?? "";
   },
 
@@ -347,10 +353,12 @@ export const api = {
       .from("orders")
       .update({ order_status: status })
       .eq("id", id)
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
-    return data as Order;
+      .select();
+    if (error) {
+      console.error("Failed to update status:", error);
+      throw new Error(error.message);
+    }
+    return (data?.[0] ?? {}) as Order;
   },
 
   // Check if any product IDs appear in active (non-Closed, non-Delivered) orders

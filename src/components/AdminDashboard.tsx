@@ -198,8 +198,10 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const handleOrderStatusChange = async (orderId: string, status: OrderStatus) => {
     try {
       await api.updateOrderStatus(orderId, status);
-      showToast("Order status updated successfully");
-      await loadOrders();
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, order_status: status } : o))
+      );
+      showToast(`Status updated to "${status}"`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed to update order status", "error");
     }
