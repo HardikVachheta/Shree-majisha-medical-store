@@ -41,6 +41,13 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
   const [orderSearch, setOrderSearch] = useState("");
   const [orderFilter, setOrderFilter] = useState<OrderFilter>("all");
 
+  // Order bulk selection
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
+  const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
+  const [bulkStatusValue, setBulkStatusValue] = useState<OrderStatus>("Packed");
+  const [bulkOrderDeleting, setBulkOrderDeleting] = useState(false);
+  const [bulkOrderDeleteOpen, setBulkOrderDeleteOpen] = useState(false);
+
   const loadProducts = useCallback(async () => {
     try {
       const result = await api.getPaginatedProducts({
@@ -205,6 +212,64 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed to update order status", "error");
     }
+  };
+
+  // ── Order bulk selection helpers ──────────────────────────────────────────
+
+  const toggleOrderSelect = (id: string) => {
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllOrders = () => {
+    setSelectedOrderIds((prev) => {
+      if (prev.size === filteredOrders.length) return new Set();
+      return new Set(filteredOrders.map((o) => o.id));
+    });
+  };
+
+  const handleBulkOrderStatusUpdate = async () => {
+    const ids = Array.from(selectedOrderIds);
+    if (ids.length === 0) return;
+    setBulkStatusOpen(false);
+    let successCount = 0;
+    for (const id of ids) {
+      try {
+        await api.updateOrderStatus(id, bulkStatusValue);
+        successCount++;
+      } catch (e) {
+        console.error("Failed to update order", id, e);
+      }
+    }
+    setOrders((prev) =>
+      prev.map((o) => (selectedOrderIds.has(o.id) ? { ...o, order_status: bulkStatusValue } : o))
+    );
+    showToast(`${successCount} order(s) updated to "${bulkStatusValue}"`);
+    setSelectedOrderIds(new Set());
+  };
+
+  const handleBulkOrderDelete = async () => {
+    const ids = Array.from(selectedOrderIds);
+    if (ids.length === 0) return;
+    setBulkOrderDeleting(true);
+    let deletedCount = 0;
+    for (const id of ids) {
+      try {
+        const { error } = await supabase.from("orders").delete().eq("id", id);
+        if (!error) deletedCount++;
+      } catch (e) {
+        console.error("Failed to delete order", id, e);
+      }
+    }
+    setOrders((prev) => prev.filter((o) => !selectedOrderIds.has(o.id)));
+    showToast(`${deletedCount} order(s) deleted`);
+    setSelectedOrderIds(new Set());
+    setBulkOrderDeleting(false);
+    setBulkOrderDeleteOpen(false);
   };
 
   // ── Filtered orders ───────────────────────────────────────────────────────
@@ -450,7 +515,7 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
         {/* ── Orders tab ────────────────────────────────────────────────────── */}
         {tab === "orders" && (
           <div className="space-y-4">
-            {/* Search + filter */}
+            {/* Search + filter + select all */}
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -478,7 +543,51 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
                   </button>
                 ))}
               </div>
+              {filteredOrders.length > 0 && (
+                <button
+                  onClick={toggleSelectAllOrders}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap"
+                >
+                  {selectedOrderIds.size === filteredOrders.length && filteredOrders.length > 0 ? (
+                    <CheckSquare className="w-4 h-4 text-emerald-600" />
+                  ) : (
+                    <Square className="w-4 h-4" />
+                  )}
+                  Select All
+                </button>
+              )}
             </div>
+
+            {/* Bulk action toolbar */}
+            {selectedOrderIds.size > 0 && (
+              <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2.5 shadow-sm">
+                <span className="text-sm font-medium text-emerald-800">
+                  {selectedOrderIds.size} order(s) selected
+                </span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    onClick={() => setBulkStatusOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors"
+                  >
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    Bulk Status Update
+                  </button>
+                  <button
+                    onClick={() => setBulkOrderDeleteOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete Selected
+                  </button>
+                  <button
+                    onClick={() => setSelectedOrderIds(new Set())}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            )}
 
             {loading ? (
               <div className="text-center py-12 text-gray-400 text-sm">Loading...</div>
@@ -489,24 +598,37 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
             ) : (
               filteredOrders.map((order) => {
                 const shortId = order.id.slice(-6).toUpperCase();
+                const isSelected = selectedOrderIds.has(order.id);
                 return (
-                  <div key={order.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+                  <div key={order.id} className={`bg-white rounded-xl border shadow-sm p-5 transition-colors ${isSelected ? "border-emerald-300 bg-emerald-50/30" : "border-gray-100"}`}>
                     <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-mono text-xs text-gray-400">#ORD-{shortId}</span>
-                          <h3 className="font-bold text-gray-900">{order.customer_name}</h3>
-                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${ORDER_STATUS_COLORS[order.order_status as OrderStatus] || "bg-gray-100 text-gray-700 border-gray-200"}`}>
-                            {order.order_status}
-                          </span>
+                      <div className="flex items-start gap-3">
+                        <button
+                          onClick={() => toggleOrderSelect(order.id)}
+                          className="mt-0.5 shrink-0"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-5 h-5 text-emerald-600" />
+                          ) : (
+                            <Square className="w-5 h-5 text-gray-300 hover:text-gray-400" />
+                          )}
+                        </button>
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-mono text-xs text-gray-400">#ORD-{shortId}</span>
+                            <h3 className="font-bold text-gray-900">{order.customer_name}</h3>
+                            <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${ORDER_STATUS_COLORS[order.order_status as OrderStatus] || "bg-gray-100 text-gray-700 border-gray-200"}`}>
+                              {order.order_status}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-500">📞 {order.phone}</p>
+                          <p className="text-sm text-gray-500">
+                            📍 {order.address_line}{order.area ? `, ${order.area}` : ""}{order.pincode ? ` - ${order.pincode}` : ""}
+                          </p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {new Date(order.created_at).toLocaleString("en-IN")}
+                          </p>
                         </div>
-                        <p className="text-sm text-gray-500">📞 {order.phone}</p>
-                        <p className="text-sm text-gray-500">
-                          📍 {order.address_line}{order.area ? `, ${order.area}` : ""}{order.pincode ? ` - ${order.pincode}` : ""}
-                        </p>
-                        <p className="text-xs text-gray-400 mt-1">
-                          {new Date(order.created_at).toLocaleString("en-IN")}
-                        </p>
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-xs text-gray-400">{order.payment_method}</p>
@@ -572,6 +694,79 @@ export default function AdminDashboard({ onExit }: AdminDashboardProps) {
           onConfirm={handleBulkDelete}
           deleting={bulkDeleting}
         />
+      )}
+
+      {/* Bulk order status update modal */}
+      {bulkStatusOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setBulkStatusOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-900">Bulk Update Status</h3>
+              <button onClick={() => setBulkStatusOpen(false)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Set status for {selectedOrderIds.size} selected order(s):
+            </p>
+            <select
+              value={bulkStatusValue}
+              onChange={(e) => setBulkStatusValue(e.target.value as OrderStatus)}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white mb-4"
+            >
+              {(Object.keys(ORDER_STATUS_LABELS) as OrderStatus[]).map((s) => (
+                <option key={s} value={s}>{ORDER_STATUS_LABELS[s]}</option>
+              ))}
+            </select>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setBulkStatusOpen(false)}
+                className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkOrderStatusUpdate}
+                className="flex-1 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors"
+              >
+                Apply to {selectedOrderIds.size}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk order delete confirm */}
+      {bulkOrderDeleteOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setBulkOrderDeleteOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trash2 className="w-6 h-6 text-red-500" />
+            </div>
+            <h3 className="font-bold text-gray-900 mb-2">Delete {selectedOrderIds.size} Order(s)?</h3>
+            <p className="text-sm text-gray-500 mb-5">
+              This will permanently delete the selected orders. This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setBulkOrderDeleteOpen(false)}
+                disabled={bulkOrderDeleting}
+                className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkOrderDelete}
+                disabled={bulkOrderDeleting}
+                className="flex-1 py-2.5 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
+              >
+                {bulkOrderDeleting ? "Deleting..." : `Delete ${selectedOrderIds.size}`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

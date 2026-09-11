@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Package, MessageCircle, MapPin, CreditCard, ShoppingBag,
-  ArrowLeft, RefreshCw,
+  ArrowLeft, RefreshCw, Check, Truck, Box, ClipboardCheck, Home,
+  Archive, XCircle,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, supabase } from "@/lib/api";
 import type { Order, OrderStatus, Customer } from "@/lib/types";
 import { ORDER_STATUS_COLORS, ORDER_STATUS_LABELS } from "@/lib/types";
 
@@ -15,14 +16,33 @@ interface MyOrdersPageProps {
   onAuthRequired: () => void;
 }
 
+const STEPS: OrderStatus[] = ["Received", "Packed", "Out for Delivery", "Delivered"];
+
+const STEP_ICONS: Partial<Record<OrderStatus, React.ReactNode>> = {
+  Received: <ClipboardCheck className="w-4 h-4" />,
+  Packed: <Box className="w-4 h-4" />,
+  "Out for Delivery": <Truck className="w-4 h-4" />,
+  Delivered: <Home className="w-4 h-4" />,
+};
+
+const STEP_DESCRIPTIONS: Partial<Record<OrderStatus, string>> = {
+  Received: "We have received your order and are verifying stock.",
+  Packed: "Medicines and items packed safely at ICB Island store.",
+  "Out for Delivery": "Rider is on the way for free local delivery in Ahmedabad.",
+  Delivered: "Order successfully delivered to your doorstep.",
+};
+
 export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: MyOrdersPageProps) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const rotateAnim = useRef(false);
 
-  const loadOrders = async () => {
+  const loadOrders = async (silent = false) => {
     if (!customer) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
+    setRefreshing(true);
     setError("");
     try {
       const data = await api.getOrdersByEmail(customer.email);
@@ -31,6 +51,7 @@ export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: M
       setError(e instanceof Error ? e.message : "Failed to load orders");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -43,9 +64,41 @@ export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: M
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customer]);
 
+  // ── Realtime subscription ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!customer?.email) return;
+    const channel = supabase
+      .channel("customer-orders-sync")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+          filter: `customer_email=eq.${customer.email}`,
+        },
+        (payload) => {
+          const updated = payload.new as Order;
+          setOrders((prev) =>
+            prev.map((ord) => (ord.id === updated.id ? { ...ord, ...updated } : ord))
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [customer?.email]);
+
+  const handleRefresh = () => {
+    rotateAnim.current = true;
+    loadOrders(true);
+  };
+
   const handleTrackWhatsApp = (order: Order) => {
     const shortId = order.id.slice(-6).toUpperCase();
-    const msg = `Hello! I'd like to track my order *#ORD-${shortId}* placed on ${new Date(order.created_at).toLocaleDateString("en-IN")}. Current status: ${order.order_status}. Please provide an update. Thank you!`;
+    const msg = `Hello Shree Majisha Medical Store, I want an update on my Order #ORD-${shortId}. Current status shows: "${order.order_status}". Name: ${order.customer_name}.`;
     window.open(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
@@ -83,11 +136,11 @@ export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: M
           <p className="text-sm text-gray-500">{customer.username}</p>
         </div>
         <button
-          onClick={loadOrders}
+          onClick={handleRefresh}
           className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500"
           title="Refresh"
         >
-          <RefreshCw className="w-4 h-4" />
+          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
         </button>
       </div>
 
@@ -105,7 +158,7 @@ export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: M
         <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-center">
           <p className="text-sm text-red-600 font-medium mb-3">{error}</p>
           <button
-            onClick={loadOrders}
+            onClick={() => loadOrders()}
             className="text-sm text-red-600 underline hover:no-underline"
           >
             Try again
@@ -131,8 +184,11 @@ export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: M
         <div className="space-y-4">
           {orders.map((order) => {
             const shortId = order.id.slice(-6).toUpperCase();
-            const statusColor = ORDER_STATUS_COLORS[order.order_status as OrderStatus] || "bg-gray-100 text-gray-700 border-gray-200";
-            const statusLabel = ORDER_STATUS_LABELS[order.order_status as OrderStatus] || order.order_status;
+            const status = order.order_status as OrderStatus;
+            const statusColor = ORDER_STATUS_COLORS[status] || "bg-gray-100 text-gray-700 border-gray-200";
+            const statusLabel = ORDER_STATUS_LABELS[status] || order.order_status;
+            const currentStepIndex = STEPS.indexOf(status);
+            const isClosed = status === "Closed";
 
             return (
               <div key={order.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -182,6 +238,67 @@ export default function MyOrdersPage({ customer, onNavigate, onAuthRequired }: M
                       ₹{order.total_amount.toFixed(2)}
                     </span>
                   </div>
+
+                  {/* ── Visual Progress Stepper ── */}
+                  {isClosed ? (
+                    <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-4 py-3">
+                      <Archive className="w-5 h-5 text-gray-500 shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-gray-600">Order Closed</p>
+                        <p className="text-xs text-gray-400">This order has been completed and archived.</p>
+                      </div>
+                    </div>
+                  ) : currentStepIndex >= 0 ? (
+                    <div className="pt-1">
+                      {/* Stepper circles */}
+                      <div className="flex items-center justify-between mb-2">
+                        {STEPS.map((step, idx) => {
+                          const isCompleted = idx < currentStepIndex;
+                          const isCurrent = idx === currentStepIndex;
+                          const isPending = idx > currentStepIndex;
+                          return (
+                            <div key={step} className="flex items-center flex-1 last:flex-none">
+                              <div className="flex flex-col items-center gap-1 shrink-0">
+                                <div
+                                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
+                                    isCompleted || isCurrent
+                                      ? "bg-emerald-600 text-white"
+                                      : "bg-gray-100 text-gray-400"
+                                  }`}
+                                >
+                                  {isCompleted ? (
+                                    <Check className="w-4 h-4" />
+                                  ) : (
+                                    STEP_ICONS[step]
+                                  )}
+                                </div>
+                                <span
+                                  className={`text-[10px] font-medium text-center leading-tight ${
+                                    isCurrent ? "text-emerald-700" : isPending ? "text-gray-400" : "text-gray-500"
+                                  }`}
+                                >
+                                  {step === "Out for Delivery" ? "Out for\nDelivery" : step}
+                                </span>
+                              </div>
+                              {idx < STEPS.length - 1 && (
+                                <div
+                                  className={`flex-1 h-0.5 mx-1 -mt-4 rounded-full transition-colors ${
+                                    idx < currentStepIndex ? "bg-emerald-500" : "bg-gray-200"
+                                  }`}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Active step description */}
+                      <div className="bg-emerald-50 rounded-lg px-3 py-2 mt-2">
+                        <p className="text-xs text-emerald-700 font-medium">
+                          {STEP_DESCRIPTIONS[status] || ""}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {/* Meta info */}
                   <div className="space-y-1 text-xs text-gray-500">
